@@ -421,5 +421,5 @@ if barstate.islast
 // ============================================================================
 // ALERTY
 // ============================================================================
-alertcondition(longCorrelationBreak, title="Long Correlation Break", message="LONG: NQ swept prev Q low, ES/YM did not. Entry signal!")
-alertcondition(shortCorrelationBreak, title="Short Correlation Break", message="SHORT: NQ swept prev Q high, ES/YM did not. Entry signal!")
+alertcondition(longCorrelationBreak, title="Long Signal", message="LONG entry signal")
+alertcondition(shortCorrelationBreak, title="Short Signal", message="SHORT entry signal")
