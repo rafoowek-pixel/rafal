@@ -275,8 +275,8 @@ if longCorrelationBreak and not inPosition
     tp1Hit := false
     entryBarIndex := bar_index
 
-    posSize = calcPositionSize(entryPrice, stopLoss, i_riskAmount, pntVal)
-    strategy.entry("Long", strategy.long, qty=posSize)
+    int qtyLong = calcPositionSize(entryPrice, stopLoss, i_riskAmount, pntVal)
+    strategy.entry("Long", strategy.long, qty=qtyLong)
     strategy.exit("TP1_Long", "Long", limit=takeProfit1, stop=stopLoss, qty_percent=i_tp1Percent)
 
     // Tworzenie linii wizualnych
@@ -295,8 +295,8 @@ if shortCorrelationBreak and not inPosition
     tp1Hit := false
     entryBarIndex := bar_index
 
-    posSize = calcPositionSize(entryPrice, stopLoss, i_riskAmount, pntVal)
-    strategy.entry("Short", strategy.short, qty=posSize)
+    int qtyShort = calcPositionSize(entryPrice, stopLoss, i_riskAmount, pntVal)
+    strategy.entry("Short", strategy.short, qty=qtyShort)
     strategy.exit("TP1_Short", "Short", limit=takeProfit1, stop=stopLoss, qty_percent=i_tp1Percent)
 
     // Tworzenie linii wizualnych
