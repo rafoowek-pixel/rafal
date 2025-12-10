@@ -46,9 +46,8 @@ minQ = get90MinQ(curHour, curMin)
 [ymO, ymH, ymL, ymC] = request.security(i_ymSymbol, timeframe.period, [open, high, low, close])
 
 // ============================================================================
-// TRACKING VARIABLES
+// TRACKING VARIABLES - Previous Quarter
 // ============================================================================
-// Previous Quarter
 var float pQ_lowBody = na
 var float pQ_lowWick = na
 var float pQ_highBody = na
@@ -56,12 +55,19 @@ var float pQ_highWick = na
 var int pQ_low90 = 0
 var int pQ_high90 = 0
 
+var float pQ_ES_lowBody = na
 var float pQ_ES_lowWick = na
+var float pQ_ES_highBody = na
 var float pQ_ES_highWick = na
+
+var float pQ_YM_lowBody = na
 var float pQ_YM_lowWick = na
+var float pQ_YM_highBody = na
 var float pQ_YM_highWick = na
 
-// Current Quarter
+// ============================================================================
+// TRACKING VARIABLES - Current Quarter
+// ============================================================================
 var float cQ_lowBody = na
 var float cQ_lowWick = na
 var float cQ_highBody = na
@@ -80,6 +86,14 @@ var float cQ_YM_highBody = na
 var float cQ_YM_highWick = na
 
 // ============================================================================
+// SWEEP TRACKING - czy wykryto sweep i czekamy na zamknięcie
+// ============================================================================
+var bool longSweepDetected = false
+var bool shortSweepDetected = false
+var float sweepWickLevel = na
+var int sweepBar = 0
+
+// ============================================================================
 // QUARTER CHANGE DETECTION
 // ============================================================================
 qChange = dailyQ != dailyQ[1]
@@ -92,9 +106,14 @@ if qChange
     pQ_low90 := cQ_low90
     pQ_high90 := cQ_high90
 
+    pQ_ES_lowBody := cQ_ES_lowBody
     pQ_ES_lowWick := cQ_ES_lowWick
+    pQ_ES_highBody := cQ_ES_highBody
     pQ_ES_highWick := cQ_ES_highWick
+
+    pQ_YM_lowBody := cQ_YM_lowBody
     pQ_YM_lowWick := cQ_YM_lowWick
+    pQ_YM_highBody := cQ_YM_highBody
     pQ_YM_highWick := cQ_YM_highWick
 
     cQ_lowBody := na
@@ -111,6 +130,10 @@ if qChange
     cQ_YM_lowWick := na
     cQ_YM_highBody := na
     cQ_YM_highWick := na
+
+    // Reset sweep flags przy zmianie kwartału
+    longSweepDetected := false
+    shortSweepDetected := false
 
 // ============================================================================
 // UPDATE MIN/MAX BODY
@@ -149,23 +172,80 @@ if na(cQ_YM_highBody) or ymHighBody > cQ_YM_highBody
     cQ_YM_highWick := ymH
 
 // ============================================================================
-// CORRELATION BREAK CONDITIONS
+// EXCLUDED TRANSITIONS
+// Q14->Q21, Q24->Q31, Q34->Q41, Q44->Q11
 // ============================================================================
-// LONG: NQ sweeps low wick & closes above, ES/YM don't sweep their wicks
-longCond1 = not na(pQ_lowWick) and low < pQ_lowWick and close > pQ_lowWick
-longCond2 = not na(pQ_ES_lowWick) and esL > pQ_ES_lowWick
-longCond3 = not na(pQ_YM_lowWick) and ymL > pQ_YM_lowWick
-longCond4 = minQ == pQ_low90
+isExcluded() =>
+    prev90 = minQ[1]
+    curr90 = minQ
+    prevD = dailyQ[1]
+    currD = dailyQ
+    ex = false
+    if prevD == 1 and currD == 2 and prev90 == 4 and curr90 == 1
+        ex := true
+    if prevD == 2 and currD == 3 and prev90 == 4 and curr90 == 1
+        ex := true
+    if prevD == 3 and currD == 4 and prev90 == 4 and curr90 == 1
+        ex := true
+    if prevD == 4 and currD == 1 and prev90 == 4 and curr90 == 1
+        ex := true
+    ex
 
-longSignal = longCond1 and longCond2 and longCond3 and longCond4
+// ============================================================================
+// CANDLE ALIGNMENT - poprzednia świeca musi być taka sama na wszystkich
+// ============================================================================
+nqPrevBull = close[1] > open[1]
+esPrevBull = esC[1] > esO[1]
+ymPrevBull = ymC[1] > ymO[1]
+candlesAligned = (nqPrevBull and esPrevBull and ymPrevBull) or (not nqPrevBull and not esPrevBull and not ymPrevBull)
 
-// SHORT: NQ sweeps high wick & closes below, ES/YM don't sweep their wicks
-shortCond1 = not na(pQ_highWick) and high > pQ_highWick and close < pQ_highWick
-shortCond2 = not na(pQ_ES_highWick) and esH < pQ_ES_highWick
-shortCond3 = not na(pQ_YM_highWick) and ymH < pQ_YM_highWick
-shortCond4 = minQ == pQ_high90
+// ============================================================================
+// SWEEP DETECTION - LONG (NQ zbiera low, ES/YM nie)
+// ============================================================================
+nqSweptLow = not na(pQ_lowWick) and low < pQ_lowWick
+esNotSweptLow = na(pQ_ES_lowWick) or esL > pQ_ES_lowWick
+ymNotSweptLow = na(pQ_YM_lowWick) or ymL > pQ_YM_lowWick
+esBodyOk = na(pQ_ES_lowBody) or esLowBody > pQ_ES_lowBody
+ymBodyOk = na(pQ_YM_lowBody) or ymLowBody > pQ_YM_lowBody
+same90Low = minQ == pQ_low90
 
-shortSignal = shortCond1 and shortCond2 and shortCond3 and shortCond4
+// Wykrycie SWEEP dla LONG
+longSweepNow = nqSweptLow and esNotSweptLow and ymNotSweptLow and esBodyOk and ymBodyOk and same90Low and not isExcluded() and candlesAligned
+
+if longSweepNow and not longSweepDetected and not shortSweepDetected
+    longSweepDetected := true
+    sweepWickLevel := pQ_lowWick
+    sweepBar := bar_index
+
+// ============================================================================
+// SWEEP DETECTION - SHORT (NQ zbiera high, ES/YM nie)
+// ============================================================================
+nqSweptHigh = not na(pQ_highWick) and high > pQ_highWick
+esNotSweptHigh = na(pQ_ES_highWick) or esH < pQ_ES_highWick
+ymNotSweptHigh = na(pQ_YM_highWick) or ymH < pQ_YM_highWick
+esBodyOkS = na(pQ_ES_highBody) or esHighBody < pQ_ES_highBody
+ymBodyOkS = na(pQ_YM_highBody) or ymHighBody < pQ_YM_highBody
+same90High = minQ == pQ_high90
+
+// Wykrycie SWEEP dla SHORT
+shortSweepNow = nqSweptHigh and esNotSweptHigh and ymNotSweptHigh and esBodyOkS and ymBodyOkS and same90High and not isExcluded() and candlesAligned
+
+if shortSweepNow and not shortSweepDetected and not longSweepDetected
+    shortSweepDetected := true
+    sweepWickLevel := pQ_highWick
+    sweepBar := bar_index
+
+// ============================================================================
+// ENTRY SIGNALS - pierwsza świeca która zamknie się powyżej/poniżej wicka
+// ============================================================================
+longSignal = longSweepDetected and close > sweepWickLevel
+shortSignal = shortSweepDetected and close < sweepWickLevel
+
+// Reset sweep po sygnale
+if longSignal
+    longSweepDetected := false
+if shortSignal
+    shortSweepDetected := false
 
 // ============================================================================
 // POSITION MANAGEMENT
@@ -192,7 +272,6 @@ if longSignal and not inPos and strategy.position_size == 0
     inPos := true
     posLong := true
     tp1Done := false
-
     int qty = calcQty(myEntry, mySL, i_riskAmount)
     strategy.entry("L", strategy.long, qty=qty)
     strategy.exit("TPL", "L", limit=myTP, stop=mySL, qty_percent=i_tp1Percent)
@@ -205,7 +284,6 @@ if shortSignal and not inPos and strategy.position_size == 0
     inPos := true
     posLong := false
     tp1Done := false
-
     int qty = calcQty(myEntry, mySL, i_riskAmount)
     strategy.entry("S", strategy.short, qty=qty)
     strategy.exit("TPS", "S", limit=myTP, stop=mySL, qty_percent=i_tp1Percent)
@@ -232,16 +310,23 @@ if strategy.position_size == 0 and inPos
 plot(i_showLines and not na(pQ_lowWick) ? pQ_lowWick : na, "Prev Q Low Wick", color.red, 2)
 plot(i_showLines and not na(pQ_highWick) ? pQ_highWick : na, "Prev Q High Wick", color.green, 2)
 
-plotshape(longSignal, "LONG", shape.triangleup, location.belowbar, color.lime, size=size.normal)
-plotshape(shortSignal, "SHORT", shape.triangledown, location.abovebar, color.red, size=size.normal)
+// Sweep detected marker
+plotshape(longSweepNow, "Sweep Low", shape.circle, location.belowbar, color.orange, size=size.small)
+plotshape(shortSweepNow, "Sweep High", shape.circle, location.abovebar, color.orange, size=size.small)
+
+// Entry signals
+plotshape(longSignal, "LONG", shape.triangleup, location.belowbar, color.lime, size=size.large)
+plotshape(shortSignal, "SHORT", shape.triangledown, location.abovebar, color.red, size=size.large)
 
 bgcolor(inPos and posLong ? color.new(color.green, 90) : na)
 bgcolor(inPos and not posLong ? color.new(color.red, 90) : na)
+bgcolor(longSweepDetected ? color.new(color.orange, 95) : na)
+bgcolor(shortSweepDetected ? color.new(color.purple, 95) : na)
 
 // ============================================================================
 // DEBUG TABLE
 // ============================================================================
-var table t = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 80))
+var table t = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80))
 
 if barstate.islast
     table.cell(t, 0, 0, "Q:", text_color=color.white)
@@ -250,16 +335,22 @@ if barstate.islast
     table.cell(t, 1, 1, str.tostring(pQ_lowWick, "#.##"), text_color=color.red)
     table.cell(t, 0, 2, "PrevQ High Wick:", text_color=color.white)
     table.cell(t, 1, 2, str.tostring(pQ_highWick, "#.##"), text_color=color.green)
-    table.cell(t, 0, 3, "PrevQ Low 90min:", text_color=color.white)
-    table.cell(t, 1, 3, str.tostring(pQ_low90), text_color=color.orange)
-    table.cell(t, 0, 4, "Long Cond 1-4:", text_color=color.white)
-    table.cell(t, 1, 4, str.tostring(longCond1) + "/" + str.tostring(longCond2) + "/" + str.tostring(longCond3) + "/" + str.tostring(longCond4), text_color=color.lime)
-    table.cell(t, 0, 5, "Short Cond 1-4:", text_color=color.white)
-    table.cell(t, 1, 5, str.tostring(shortCond1) + "/" + str.tostring(shortCond2) + "/" + str.tostring(shortCond3) + "/" + str.tostring(shortCond4), text_color=color.red)
-    table.cell(t, 0, 6, "Position:", text_color=color.white)
-    table.cell(t, 1, 6, inPos ? (posLong ? "LONG" : "SHORT") : "NONE", text_color=color.yellow)
-    table.cell(t, 0, 7, "Point Value:", text_color=color.white)
-    table.cell(t, 1, 7, "$" + str.tostring(pntVal), text_color=color.yellow)
+    table.cell(t, 0, 3, "Long Sweep:", text_color=color.white)
+    table.cell(t, 1, 3, longSweepDetected ? "WAITING" : "NO", text_color=longSweepDetected ? color.orange : color.gray)
+    table.cell(t, 0, 4, "Short Sweep:", text_color=color.white)
+    table.cell(t, 1, 4, shortSweepDetected ? "WAITING" : "NO", text_color=shortSweepDetected ? color.purple : color.gray)
+    table.cell(t, 0, 5, "Sweep Level:", text_color=color.white)
+    table.cell(t, 1, 5, str.tostring(sweepWickLevel, "#.##"), text_color=color.orange)
+    table.cell(t, 0, 6, "Candles Aligned:", text_color=color.white)
+    table.cell(t, 1, 6, candlesAligned ? "YES" : "NO", text_color=candlesAligned ? color.lime : color.red)
+    table.cell(t, 0, 7, "Position:", text_color=color.white)
+    table.cell(t, 1, 7, inPos ? (posLong ? "LONG" : "SHORT") : "NONE", text_color=color.yellow)
+    table.cell(t, 0, 8, "Entry:", text_color=color.white)
+    table.cell(t, 1, 8, str.tostring(myEntry, "#.##"), text_color=color.white)
+    table.cell(t, 0, 9, "SL:", text_color=color.white)
+    table.cell(t, 1, 9, str.tostring(mySL, "#.##"), text_color=color.fuchsia)
+    table.cell(t, 0, 10, "TP:", text_color=color.white)
+    table.cell(t, 1, 10, str.tostring(myTP, "#.##"), text_color=color.aqua)
 
 alertcondition(longSignal, "Long Signal", "LONG")
 alertcondition(shortSignal, "Short Signal", "SHORT")
