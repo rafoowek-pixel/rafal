@@ -2,399 +2,264 @@
 // © Quarterly Correlation Break Strategy
 
 //@version=5
-strategy("Quarterly Correlation Break Strategy", overlay=true, initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=1, currency=currency.USD)
+strategy("Quarterly Correlation Break", overlay=true, initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=1)
 
 // ============================================================================
 // INPUTS
 // ============================================================================
 i_riskAmount = input.float(1000, "Risk Amount ($)", minval=100)
 i_tp1Percent = input.float(70, "TP1 Percentage (%)", minval=1, maxval=100)
-i_showQuarterLines = input.bool(true, "Show Quarter Lines")
-i_showEntryLines = input.bool(true, "Show Entry/SL/TP Lines")
+i_showLines = input.bool(true, "Show Lines")
 i_timezone = input.string("America/New_York", "Timezone", options=["America/New_York", "America/Chicago", "UTC"])
 
-// Symbole do analizy korelacji
 i_esSymbol = input.symbol("CME_MINI:ES1!", "ES Symbol")
 i_ymSymbol = input.symbol("CBOT_MINI:YM1!", "YM Symbol")
 
 // ============================================================================
-// QUARTER DEFINITIONS
+// QUARTER FUNCTIONS
 // ============================================================================
-getDailyQuarter(h) =>
-    result = 0
-    if h >= 18 and h < 24
-        result := 1
-    else if h >= 0 and h < 6
-        result := 2
-    else if h >= 6 and h < 12
-        result := 3
-    else if h >= 12 and h < 18
-        result := 4
-    result
+getDailyQ(h) =>
+    h >= 18 ? 1 : h >= 12 ? 4 : h >= 6 ? 3 : 2
 
-get90MinQuarter(h, m) =>
-    totalMinutes = h * 60 + m
-    result = 0
-    if totalMinutes >= 1080 and totalMinutes < 1440
-        offset = totalMinutes - 1080
-        result := math.floor(offset / 90) + 1
-    else if totalMinutes >= 0 and totalMinutes < 360
-        offset = totalMinutes
-        result := math.floor(offset / 90) + 1
-    else if totalMinutes >= 360 and totalMinutes < 720
-        offset = totalMinutes - 360
-        result := math.floor(offset / 90) + 1
-    else if totalMinutes >= 720 and totalMinutes < 1080
-        offset = totalMinutes - 720
-        result := math.floor(offset / 90) + 1
-    math.min(result, 4)
+get90MinQ(h, m) =>
+    mins = h * 60 + m
+    q = 0
+    if mins >= 1080 and mins < 1440
+        q := int((mins - 1080) / 90) + 1
+    else if mins < 360
+        q := int(mins / 90) + 1
+    else if mins < 720
+        q := int((mins - 360) / 90) + 1
+    else if mins < 1080
+        q := int((mins - 720) / 90) + 1
+    math.min(q, 4)
 
-currentHour = hour(time, i_timezone)
-currentMinute = minute(time, i_timezone)
-currentDailyQuarter = getDailyQuarter(currentHour)
-current90MinQuarter = get90MinQuarter(currentHour, currentMinute)
+curHour = hour(time, i_timezone)
+curMin = minute(time, i_timezone)
+dailyQ = getDailyQ(curHour)
+minQ = get90MinQ(curHour, curMin)
 
 // ============================================================================
-// POBIERANIE DANYCH Z ES I YM
+// ES & YM DATA
 // ============================================================================
-[esOpen, esHigh, esLow, esClose] = request.security(i_esSymbol, timeframe.period, [open, high, low, close])
-[ymOpen, ymHigh, ymLow, ymClose] = request.security(i_ymSymbol, timeframe.period, [open, high, low, close])
-
-// ============================================================================
-// ZMIENNE DO ŚLEDZENIA KWARTAŁÓW
-// ============================================================================
-var float prevQ_lowestBodyClose = na
-var float prevQ_highestBodyClose = na
-var float prevQ_lowestBodyWick = na
-var float prevQ_highestBodyWick = na
-var int prevQ_lowestBody90Min = 0
-var int prevQ_highestBody90Min = 0
-
-var float prevQ_ES_lowestBodyClose = na
-var float prevQ_ES_highestBodyClose = na
-var float prevQ_ES_lowestBodyWick = na
-var float prevQ_ES_highestBodyWick = na
-
-var float prevQ_YM_lowestBodyClose = na
-var float prevQ_YM_highestBodyClose = na
-var float prevQ_YM_lowestBodyWick = na
-var float prevQ_YM_highestBodyWick = na
-
-var float currQ_lowestBodyClose = na
-var float currQ_highestBodyClose = na
-var float currQ_lowestBodyWick = na
-var float currQ_highestBodyWick = na
-var int currQ_lowestBody90Min = 0
-var int currQ_highestBody90Min = 0
-
-var float currQ_ES_lowestBodyClose = na
-var float currQ_ES_highestBodyClose = na
-var float currQ_ES_lowestBodyWick = na
-var float currQ_ES_highestBodyWick = na
-
-var float currQ_YM_lowestBodyClose = na
-var float currQ_YM_highestBodyClose = na
-var float currQ_YM_lowestBodyWick = na
-var float currQ_YM_highestBodyWick = na
+[esO, esH, esL, esC] = request.security(i_esSymbol, timeframe.period, [open, high, low, close])
+[ymO, ymH, ymL, ymC] = request.security(i_ymSymbol, timeframe.period, [open, high, low, close])
 
 // ============================================================================
-// DETEKCJA ZMIANY KWARTAŁU DZIENNEGO
+// TRACKING VARIABLES
 // ============================================================================
-quarterChanged = currentDailyQuarter != currentDailyQuarter[1] and barstate.isconfirmed
+// Previous Quarter
+var float pQ_lowBody = na
+var float pQ_lowWick = na
+var float pQ_highBody = na
+var float pQ_highWick = na
+var int pQ_low90 = 0
+var int pQ_high90 = 0
 
-if quarterChanged
-    prevQ_lowestBodyClose := currQ_lowestBodyClose
-    prevQ_highestBodyClose := currQ_highestBodyClose
-    prevQ_lowestBodyWick := currQ_lowestBodyWick
-    prevQ_highestBodyWick := currQ_highestBodyWick
-    prevQ_lowestBody90Min := currQ_lowestBody90Min
-    prevQ_highestBody90Min := currQ_highestBody90Min
+var float pQ_ES_lowWick = na
+var float pQ_ES_highWick = na
+var float pQ_YM_lowWick = na
+var float pQ_YM_highWick = na
 
-    prevQ_ES_lowestBodyClose := currQ_ES_lowestBodyClose
-    prevQ_ES_highestBodyClose := currQ_ES_highestBodyClose
-    prevQ_ES_lowestBodyWick := currQ_ES_lowestBodyWick
-    prevQ_ES_highestBodyWick := currQ_ES_highestBodyWick
+// Current Quarter
+var float cQ_lowBody = na
+var float cQ_lowWick = na
+var float cQ_highBody = na
+var float cQ_highWick = na
+var int cQ_low90 = 0
+var int cQ_high90 = 0
 
-    prevQ_YM_lowestBodyClose := currQ_YM_lowestBodyClose
-    prevQ_YM_highestBodyClose := currQ_YM_highestBodyClose
-    prevQ_YM_lowestBodyWick := currQ_YM_lowestBodyWick
-    prevQ_YM_highestBodyWick := currQ_YM_highestBodyWick
+var float cQ_ES_lowBody = na
+var float cQ_ES_lowWick = na
+var float cQ_ES_highBody = na
+var float cQ_ES_highWick = na
 
-    currQ_lowestBodyClose := na
-    currQ_highestBodyClose := na
-    currQ_lowestBodyWick := na
-    currQ_highestBodyWick := na
-    currQ_lowestBody90Min := 0
-    currQ_highestBody90Min := 0
-
-    currQ_ES_lowestBodyClose := na
-    currQ_ES_highestBodyClose := na
-    currQ_ES_lowestBodyWick := na
-    currQ_ES_highestBodyWick := na
-
-    currQ_YM_lowestBodyClose := na
-    currQ_YM_highestBodyClose := na
-    currQ_YM_lowestBodyWick := na
-    currQ_YM_highestBodyWick := na
+var float cQ_YM_lowBody = na
+var float cQ_YM_lowWick = na
+var float cQ_YM_highBody = na
+var float cQ_YM_highWick = na
 
 // ============================================================================
-// AKTUALIZACJA MIN/MAX BODY
+// QUARTER CHANGE DETECTION
 // ============================================================================
-lowestBody = math.min(open, close)
-highestBody = math.max(open, close)
-esLowestBody = math.min(esOpen, esClose)
-esHighestBody = math.max(esOpen, esClose)
-ymLowestBody = math.min(ymOpen, ymClose)
-ymHighestBody = math.max(ymOpen, ymClose)
+qChange = dailyQ != dailyQ[1]
 
-if na(currQ_lowestBodyClose) or lowestBody < currQ_lowestBodyClose
-    currQ_lowestBodyClose := lowestBody
-    currQ_lowestBodyWick := low
-    currQ_lowestBody90Min := current90MinQuarter
+if qChange
+    pQ_lowBody := cQ_lowBody
+    pQ_lowWick := cQ_lowWick
+    pQ_highBody := cQ_highBody
+    pQ_highWick := cQ_highWick
+    pQ_low90 := cQ_low90
+    pQ_high90 := cQ_high90
 
-if na(currQ_highestBodyClose) or highestBody > currQ_highestBodyClose
-    currQ_highestBodyClose := highestBody
-    currQ_highestBodyWick := high
-    currQ_highestBody90Min := current90MinQuarter
+    pQ_ES_lowWick := cQ_ES_lowWick
+    pQ_ES_highWick := cQ_ES_highWick
+    pQ_YM_lowWick := cQ_YM_lowWick
+    pQ_YM_highWick := cQ_YM_highWick
 
-if na(currQ_ES_lowestBodyClose) or esLowestBody < currQ_ES_lowestBodyClose
-    currQ_ES_lowestBodyClose := esLowestBody
-    currQ_ES_lowestBodyWick := esLow
-
-if na(currQ_ES_highestBodyClose) or esHighestBody > currQ_ES_highestBodyClose
-    currQ_ES_highestBodyClose := esHighestBody
-    currQ_ES_highestBodyWick := esHigh
-
-if na(currQ_YM_lowestBodyClose) or ymLowestBody < currQ_YM_lowestBodyClose
-    currQ_YM_lowestBodyClose := ymLowestBody
-    currQ_YM_lowestBodyWick := ymLow
-
-if na(currQ_YM_highestBodyClose) or ymHighestBody > currQ_YM_highestBodyClose
-    currQ_YM_highestBodyClose := ymHighestBody
-    currQ_YM_highestBodyWick := ymHigh
+    cQ_lowBody := na
+    cQ_lowWick := na
+    cQ_highBody := na
+    cQ_highWick := na
+    cQ_low90 := 0
+    cQ_high90 := 0
+    cQ_ES_lowBody := na
+    cQ_ES_lowWick := na
+    cQ_ES_highBody := na
+    cQ_ES_highWick := na
+    cQ_YM_lowBody := na
+    cQ_YM_lowWick := na
+    cQ_YM_highBody := na
+    cQ_YM_highWick := na
 
 // ============================================================================
-// WYKLUCZENIA PRZEJŚĆ MIĘDZY KWARTAŁAMI
+// UPDATE MIN/MAX BODY
 // ============================================================================
-isExcludedTransition() =>
-    prev90Min = current90MinQuarter[1]
-    curr90Min = current90MinQuarter
-    prevDaily = currentDailyQuarter[1]
-    currDaily = currentDailyQuarter
-    excluded = false
-    if prevDaily == 1 and currDaily == 2 and prev90Min == 4 and curr90Min == 1
-        excluded := true
-    if prevDaily == 2 and currDaily == 3 and prev90Min == 4 and curr90Min == 1
-        excluded := true
-    if prevDaily == 3 and currDaily == 4 and prev90Min == 4 and curr90Min == 1
-        excluded := true
-    if prevDaily == 4 and currDaily == 1 and prev90Min == 4 and curr90Min == 1
-        excluded := true
-    excluded
+nqLowBody = math.min(open, close)
+nqHighBody = math.max(open, close)
+esLowBody = math.min(esO, esC)
+esHighBody = math.max(esO, esC)
+ymLowBody = math.min(ymO, ymC)
+ymHighBody = math.max(ymO, ymC)
 
-// ============================================================================
-// ALIGNMENT ŚWIEC
-// ============================================================================
-nqPrevCandleBullish = close[1] > open[1]
-esPrevCandleBullish = esClose[1] > esOpen[1]
-ymPrevCandleBullish = ymClose[1] > ymOpen[1]
-allPrevCandlesAligned = (nqPrevCandleBullish and esPrevCandleBullish and ymPrevCandleBullish) or (not nqPrevCandleBullish and not esPrevCandleBullish and not ymPrevCandleBullish)
+if na(cQ_lowBody) or nqLowBody < cQ_lowBody
+    cQ_lowBody := nqLowBody
+    cQ_lowWick := low
+    cQ_low90 := minQ
 
-// ============================================================================
-// DETEKCJA ZŁAMANIA KORELACJI - LONG
-// NQ musi zebrać WICK (low) poprzedniego Q i zamknąć się POWYŻEJ tego wicka
-// ES i YM NIE mogą zebrać ani wicka ani body
-// ============================================================================
-nqSweptLow = low < prevQ_lowestBodyWick
-nqClosedAboveWick = close > prevQ_lowestBodyWick
+if na(cQ_highBody) or nqHighBody > cQ_highBody
+    cQ_highBody := nqHighBody
+    cQ_highWick := high
+    cQ_high90 := minQ
 
-esNotSweptLow = esLow > prevQ_ES_lowestBodyWick
-ymNotSweptLow = ymLow > prevQ_YM_lowestBodyWick
+if na(cQ_ES_lowBody) or esLowBody < cQ_ES_lowBody
+    cQ_ES_lowBody := esLowBody
+    cQ_ES_lowWick := esL
 
-esBodyNotBelowPrevBody = math.min(esOpen, esClose) > prevQ_ES_lowestBodyClose
-ymBodyNotBelowPrevBody = math.min(ymOpen, ymClose) > prevQ_YM_lowestBodyClose
+if na(cQ_ES_highBody) or esHighBody > cQ_ES_highBody
+    cQ_ES_highBody := esHighBody
+    cQ_ES_highWick := esH
 
-same90MinAsLow = current90MinQuarter == prevQ_lowestBody90Min
+if na(cQ_YM_lowBody) or ymLowBody < cQ_YM_lowBody
+    cQ_YM_lowBody := ymLowBody
+    cQ_YM_lowWick := ymL
 
-longCorrelationBreak = nqSweptLow and nqClosedAboveWick and esNotSweptLow and ymNotSweptLow and esBodyNotBelowPrevBody and ymBodyNotBelowPrevBody and same90MinAsLow and not isExcludedTransition() and allPrevCandlesAligned and not na(prevQ_lowestBodyWick) and barstate.isconfirmed
+if na(cQ_YM_highBody) or ymHighBody > cQ_YM_highBody
+    cQ_YM_highBody := ymHighBody
+    cQ_YM_highWick := ymH
 
 // ============================================================================
-// DETEKCJA ZŁAMANIA KORELACJI - SHORT
-// NQ musi zebrać WICK (high) poprzedniego Q i zamknąć się PONIŻEJ tego wicka
+// CORRELATION BREAK CONDITIONS
 // ============================================================================
-nqSweptHigh = high > prevQ_highestBodyWick
-nqClosedBelowWick = close < prevQ_highestBodyWick
+// LONG: NQ sweeps low wick & closes above, ES/YM don't sweep their wicks
+longCond1 = not na(pQ_lowWick) and low < pQ_lowWick and close > pQ_lowWick
+longCond2 = not na(pQ_ES_lowWick) and esL > pQ_ES_lowWick
+longCond3 = not na(pQ_YM_lowWick) and ymL > pQ_YM_lowWick
+longCond4 = minQ == pQ_low90
 
-esNotSweptHigh = esHigh < prevQ_ES_highestBodyWick
-ymNotSweptHigh = ymHigh < prevQ_YM_highestBodyWick
+longSignal = longCond1 and longCond2 and longCond3 and longCond4
 
-esBodyNotAbovePrevBody = math.max(esOpen, esClose) < prevQ_ES_highestBodyClose
-ymBodyNotAbovePrevBody = math.max(ymOpen, ymClose) < prevQ_YM_highestBodyClose
+// SHORT: NQ sweeps high wick & closes below, ES/YM don't sweep their wicks
+shortCond1 = not na(pQ_highWick) and high > pQ_highWick and close < pQ_highWick
+shortCond2 = not na(pQ_ES_highWick) and esH < pQ_ES_highWick
+shortCond3 = not na(pQ_YM_highWick) and ymH < pQ_YM_highWick
+shortCond4 = minQ == pQ_high90
 
-same90MinAsHigh = current90MinQuarter == prevQ_highestBody90Min
-
-shortCorrelationBreak = nqSweptHigh and nqClosedBelowWick and esNotSweptHigh and ymNotSweptHigh and esBodyNotAbovePrevBody and ymBodyNotAbovePrevBody and same90MinAsHigh and not isExcludedTransition() and allPrevCandlesAligned and not na(prevQ_highestBodyWick) and barstate.isconfirmed
+shortSignal = shortCond1 and shortCond2 and shortCond3 and shortCond4
 
 // ============================================================================
-// ZARZĄDZANIE POZYCJĄ
+// POSITION MANAGEMENT
 // ============================================================================
-var float entryPrice = na
-var float stopLoss = na
-var float takeProfit1 = na
-var bool inPosition = false
-var bool isLong = false
-var bool tp1Hit = false
-var int entryBarIndex = 0
+var float myEntry = na
+var float mySL = na
+var float myTP = na
+var bool inPos = false
+var bool posLong = false
+var bool tp1Done = false
 
-// Linie wizualne
-var line myEntryLine = na
-var line mySLLine = na
-var line myTPLine = na
-
-// Obliczanie wielkości pozycji - $20 per punkt dla NQ E-mini
 pntVal = syminfo.pointvalue
 
-calcPositionSize(entryP, slP, riskAmt, tickVal) =>
-    riskPoints = math.abs(entryP - slP)
-    riskPerContract = riskPoints * tickVal
-    if riskPerContract > 0
-        math.max(1, math.round(riskAmt / riskPerContract))
-    else
-        1
+calcQty(ent, sl, risk) =>
+    pts = math.abs(ent - sl)
+    rpc = pts * pntVal
+    rpc > 0 ? math.max(1, math.round(risk / rpc)) : 1
+
+// LONG ENTRY
+if longSignal and not inPos and strategy.position_size == 0
+    myEntry := close
+    mySL := low
+    myTP := pQ_highWick
+    inPos := true
+    posLong := true
+    tp1Done := false
+
+    int qty = calcQty(myEntry, mySL, i_riskAmount)
+    strategy.entry("L", strategy.long, qty=qty)
+    strategy.exit("TPL", "L", limit=myTP, stop=mySL, qty_percent=i_tp1Percent)
+
+// SHORT ENTRY
+if shortSignal and not inPos and strategy.position_size == 0
+    myEntry := close
+    mySL := high
+    myTP := pQ_lowWick
+    inPos := true
+    posLong := false
+    tp1Done := false
+
+    int qty = calcQty(myEntry, mySL, i_riskAmount)
+    strategy.entry("S", strategy.short, qty=qty)
+    strategy.exit("TPS", "S", limit=myTP, stop=mySL, qty_percent=i_tp1Percent)
+
+// BREAK EVEN
+if inPos and not tp1Done
+    if posLong and high >= myTP
+        tp1Done := true
+        strategy.exit("BEL", "L", stop=myEntry)
+    if not posLong and low <= myTP
+        tp1Done := true
+        strategy.exit("BES", "S", stop=myEntry)
+
+// RESET
+if strategy.position_size == 0 and inPos
+    inPos := false
+    myEntry := na
+    mySL := na
+    myTP := na
 
 // ============================================================================
-// SYGNAŁY WEJŚCIA
+// VISUALIZATION
 // ============================================================================
-// LONG Entry
-if longCorrelationBreak and not inPosition
-    entryPrice := close
-    stopLoss := low
-    takeProfit1 := prevQ_highestBodyWick
-    inPosition := true
-    isLong := true
-    tp1Hit := false
-    entryBarIndex := bar_index
+plot(i_showLines and not na(pQ_lowWick) ? pQ_lowWick : na, "Prev Q Low Wick", color.red, 2)
+plot(i_showLines and not na(pQ_highWick) ? pQ_highWick : na, "Prev Q High Wick", color.green, 2)
 
-    int qtyLong = calcPositionSize(entryPrice, stopLoss, i_riskAmount, pntVal)
-    strategy.entry("Long", strategy.long, qty=qtyLong)
-    strategy.exit("TP1_Long", "Long", limit=takeProfit1, stop=stopLoss, qty_percent=i_tp1Percent)
+plotshape(longSignal, "LONG", shape.triangleup, location.belowbar, color.lime, size=size.normal)
+plotshape(shortSignal, "SHORT", shape.triangledown, location.abovebar, color.red, size=size.normal)
 
-    // Tworzenie linii wizualnych
-    if i_showEntryLines
-        myEntryLine := line.new(bar_index, entryPrice, bar_index + 50, entryPrice, color=color.white, width=2, extend=extend.right)
-        mySLLine := line.new(bar_index, stopLoss, bar_index + 50, stopLoss, color=color.fuchsia, width=2, extend=extend.right)
-        myTPLine := line.new(bar_index, takeProfit1, bar_index + 50, takeProfit1, color=color.aqua, width=2, extend=extend.right)
-
-// SHORT Entry
-if shortCorrelationBreak and not inPosition
-    entryPrice := close
-    stopLoss := high
-    takeProfit1 := prevQ_lowestBodyWick
-    inPosition := true
-    isLong := false
-    tp1Hit := false
-    entryBarIndex := bar_index
-
-    int qtyShort = calcPositionSize(entryPrice, stopLoss, i_riskAmount, pntVal)
-    strategy.entry("Short", strategy.short, qty=qtyShort)
-    strategy.exit("TP1_Short", "Short", limit=takeProfit1, stop=stopLoss, qty_percent=i_tp1Percent)
-
-    // Tworzenie linii wizualnych
-    if i_showEntryLines
-        myEntryLine := line.new(bar_index, entryPrice, bar_index + 50, entryPrice, color=color.white, width=2, extend=extend.right)
-        mySLLine := line.new(bar_index, stopLoss, bar_index + 50, stopLoss, color=color.fuchsia, width=2, extend=extend.right)
-        myTPLine := line.new(bar_index, takeProfit1, bar_index + 50, takeProfit1, color=color.aqua, width=2, extend=extend.right)
+bgcolor(inPos and posLong ? color.new(color.green, 90) : na)
+bgcolor(inPos and not posLong ? color.new(color.red, 90) : na)
 
 // ============================================================================
-// ZARZĄDZANIE TP1 I BREAK EVEN
+// DEBUG TABLE
 // ============================================================================
-if inPosition and not tp1Hit
-    if isLong and high >= takeProfit1
-        tp1Hit := true
-        strategy.exit("BE_Long", "Long", stop=entryPrice)
-        if not na(mySLLine)
-            line.set_y1(mySLLine, entryPrice)
-            line.set_y2(mySLLine, entryPrice)
-            line.set_color(mySLLine, color.yellow)
-    if not isLong and low <= takeProfit1
-        tp1Hit := true
-        strategy.exit("BE_Short", "Short", stop=entryPrice)
-        if not na(mySLLine)
-            line.set_y1(mySLLine, entryPrice)
-            line.set_y2(mySLLine, entryPrice)
-            line.set_color(mySLLine, color.yellow)
-
-// Reset pozycji gdy zamknięta
-if strategy.position_size == 0 and inPosition
-    inPosition := false
-    entryPrice := na
-    stopLoss := na
-    takeProfit1 := na
-    tp1Hit := false
-
-    // Usuń linie
-    if not na(myEntryLine)
-        line.delete(myEntryLine)
-    if not na(mySLLine)
-        line.delete(mySLLine)
-    if not na(myTPLine)
-        line.delete(myTPLine)
-
-// ============================================================================
-// WIZUALIZACJA
-// ============================================================================
-// Poziomy poprzedniego kwartału
-plot(i_showQuarterLines and not na(prevQ_lowestBodyClose) ? prevQ_lowestBodyClose : na, title="Prev Q Low Body", color=color.red, style=plot.style_linebr, linewidth=1)
-plot(i_showQuarterLines and not na(prevQ_highestBodyClose) ? prevQ_highestBodyClose : na, title="Prev Q High Body", color=color.green, style=plot.style_linebr, linewidth=1)
-plot(i_showQuarterLines and not na(prevQ_lowestBodyWick) ? prevQ_lowestBodyWick : na, title="Prev Q Low Wick", color=color.new(color.red, 50), style=plot.style_linebr, linewidth=1)
-plot(i_showQuarterLines and not na(prevQ_highestBodyWick) ? prevQ_highestBodyWick : na, title="Prev Q High Wick", color=color.new(color.green, 50), style=plot.style_linebr, linewidth=1)
-
-// Sygnały wejścia
-plotshape(longCorrelationBreak, title="Long Entry", location=location.belowbar, color=color.lime, style=shape.arrowup, text="LONG", size=size.large)
-plotshape(shortCorrelationBreak, title="Short Entry", location=location.abovebar, color=color.red, style=shape.arrowdown, text="SHORT", size=size.large)
-
-// Kolorowanie tła
-bgcolor(inPosition and isLong ? color.new(color.green, 90) : na, title="Long Position BG")
-bgcolor(inPosition and not isLong ? color.new(color.red, 90) : na, title="Short Position BG")
-
-// ============================================================================
-// TABELA INFORMACYJNA
-// ============================================================================
-var table infoTable = table.new(position.top_right, 2, 14, bgcolor=color.new(color.black, 80), border_width=1)
+var table t = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 80))
 
 if barstate.islast
-    table.cell(infoTable, 0, 0, "Daily Q:", text_color=color.white)
-    table.cell(infoTable, 1, 0, "Q" + str.tostring(currentDailyQuarter), text_color=color.yellow)
-    table.cell(infoTable, 0, 1, "90min Q:", text_color=color.white)
-    table.cell(infoTable, 1, 1, "Q" + str.tostring(currentDailyQuarter) + str.tostring(current90MinQuarter), text_color=color.yellow)
-    table.cell(infoTable, 0, 2, "Prev Q Low Body:", text_color=color.white)
-    table.cell(infoTable, 1, 2, str.tostring(prevQ_lowestBodyClose, "#.##"), text_color=color.red)
-    table.cell(infoTable, 0, 3, "Prev Q Low Wick:", text_color=color.white)
-    table.cell(infoTable, 1, 3, str.tostring(prevQ_lowestBodyWick, "#.##"), text_color=color.red)
-    table.cell(infoTable, 0, 4, "Prev Q High Body:", text_color=color.white)
-    table.cell(infoTable, 1, 4, str.tostring(prevQ_highestBodyClose, "#.##"), text_color=color.green)
-    table.cell(infoTable, 0, 5, "Prev Q High Wick:", text_color=color.white)
-    table.cell(infoTable, 1, 5, str.tostring(prevQ_highestBodyWick, "#.##"), text_color=color.green)
-    table.cell(infoTable, 0, 6, "Point Value:", text_color=color.white)
-    table.cell(infoTable, 1, 6, "$" + str.tostring(pntVal), text_color=color.yellow)
-    table.cell(infoTable, 0, 7, "Position:", text_color=color.white)
-    table.cell(infoTable, 1, 7, inPosition ? (isLong ? "LONG" : "SHORT") : "NONE", text_color=inPosition ? (isLong ? color.lime : color.red) : color.gray)
-    table.cell(infoTable, 0, 8, "Entry:", text_color=color.white)
-    table.cell(infoTable, 1, 8, inPosition ? str.tostring(entryPrice, "#.##") : "-", text_color=color.white)
-    table.cell(infoTable, 0, 9, "Stop Loss:", text_color=color.white)
-    table.cell(infoTable, 1, 9, inPosition ? str.tostring(stopLoss, "#.##") : "-", text_color=color.fuchsia)
-    table.cell(infoTable, 0, 10, "Take Profit:", text_color=color.white)
-    table.cell(infoTable, 1, 10, inPosition ? str.tostring(takeProfit1, "#.##") : "-", text_color=color.aqua)
-    table.cell(infoTable, 0, 11, "Risk Points:", text_color=color.white)
-    riskPts = inPosition ? math.abs(entryPrice - stopLoss) : 0
-    table.cell(infoTable, 1, 11, inPosition ? str.tostring(riskPts, "#.##") : "-", text_color=color.orange)
-    table.cell(infoTable, 0, 12, "TP1 Hit:", text_color=color.white)
-    table.cell(infoTable, 1, 12, tp1Hit ? "YES (BE)" : "NO", text_color=tp1Hit ? color.lime : color.gray)
-    table.cell(infoTable, 0, 13, "Candles Aligned:", text_color=color.white)
-    table.cell(infoTable, 1, 13, allPrevCandlesAligned ? "YES" : "NO", text_color=allPrevCandlesAligned ? color.lime : color.red)
+    table.cell(t, 0, 0, "Q:", text_color=color.white)
+    table.cell(t, 1, 0, "Q" + str.tostring(dailyQ) + str.tostring(minQ), text_color=color.yellow)
+    table.cell(t, 0, 1, "PrevQ Low Wick:", text_color=color.white)
+    table.cell(t, 1, 1, str.tostring(pQ_lowWick, "#.##"), text_color=color.red)
+    table.cell(t, 0, 2, "PrevQ High Wick:", text_color=color.white)
+    table.cell(t, 1, 2, str.tostring(pQ_highWick, "#.##"), text_color=color.green)
+    table.cell(t, 0, 3, "PrevQ Low 90min:", text_color=color.white)
+    table.cell(t, 1, 3, str.tostring(pQ_low90), text_color=color.orange)
+    table.cell(t, 0, 4, "Long Cond 1-4:", text_color=color.white)
+    table.cell(t, 1, 4, str.tostring(longCond1) + "/" + str.tostring(longCond2) + "/" + str.tostring(longCond3) + "/" + str.tostring(longCond4), text_color=color.lime)
+    table.cell(t, 0, 5, "Short Cond 1-4:", text_color=color.white)
+    table.cell(t, 1, 5, str.tostring(shortCond1) + "/" + str.tostring(shortCond2) + "/" + str.tostring(shortCond3) + "/" + str.tostring(shortCond4), text_color=color.red)
+    table.cell(t, 0, 6, "Position:", text_color=color.white)
+    table.cell(t, 1, 6, inPos ? (posLong ? "LONG" : "SHORT") : "NONE", text_color=color.yellow)
+    table.cell(t, 0, 7, "Point Value:", text_color=color.white)
+    table.cell(t, 1, 7, "$" + str.tostring(pntVal), text_color=color.yellow)
 
-// ============================================================================
-// ALERTY
-// ============================================================================
-alertcondition(longCorrelationBreak, title="Long Signal", message="LONG entry signal")
-alertcondition(shortCorrelationBreak, title="Short Signal", message="SHORT entry signal")
+alertcondition(longSignal, "Long Signal", "LONG")
+alertcondition(shortSignal, "Short Signal", "SHORT")
