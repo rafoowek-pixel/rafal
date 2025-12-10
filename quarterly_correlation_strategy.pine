@@ -247,16 +247,16 @@ var bool tp1Hit = false
 var int entryBarIndex = 0
 
 // Linie wizualne
-var line entryLine = na
-var line slLine = na
-var line tpLine = na
+var line myEntryLine = na
+var line mySLLine = na
+var line myTPLine = na
 
 // Obliczanie wielkości pozycji - $20 per punkt dla NQ E-mini
-pointValue = syminfo.pointvalue
+pntVal = syminfo.pointvalue
 
-calcPositionSize(entry, sl, riskAmt) =>
-    riskPoints = math.abs(entry - sl)
-    riskPerContract = riskPoints * pointValue
+calcPositionSize(entryP, slP, riskAmt, tickVal) =>
+    riskPoints = math.abs(entryP - slP)
+    riskPerContract = riskPoints * tickVal
     if riskPerContract > 0
         math.max(1, math.round(riskAmt / riskPerContract))
     else
@@ -275,15 +275,15 @@ if longCorrelationBreak and not inPosition
     tp1Hit := false
     entryBarIndex := bar_index
 
-    posSize = calcPositionSize(entryPrice, stopLoss, i_riskAmount)
+    posSize = calcPositionSize(entryPrice, stopLoss, i_riskAmount, pntVal)
     strategy.entry("Long", strategy.long, qty=posSize)
     strategy.exit("TP1_Long", "Long", limit=takeProfit1, stop=stopLoss, qty_percent=i_tp1Percent)
 
     // Tworzenie linii wizualnych
     if i_showEntryLines
-        entryLine := line.new(bar_index, entryPrice, bar_index + 50, entryPrice, color=color.white, width=2, extend=extend.right)
-        slLine := line.new(bar_index, stopLoss, bar_index + 50, stopLoss, color=color.fuchsia, width=2, extend=extend.right)
-        tpLine := line.new(bar_index, takeProfit1, bar_index + 50, takeProfit1, color=color.aqua, width=2, extend=extend.right)
+        myEntryLine := line.new(bar_index, entryPrice, bar_index + 50, entryPrice, color=color.white, width=2, extend=extend.right)
+        mySLLine := line.new(bar_index, stopLoss, bar_index + 50, stopLoss, color=color.fuchsia, width=2, extend=extend.right)
+        myTPLine := line.new(bar_index, takeProfit1, bar_index + 50, takeProfit1, color=color.aqua, width=2, extend=extend.right)
 
 // SHORT Entry
 if shortCorrelationBreak and not inPosition
@@ -295,15 +295,15 @@ if shortCorrelationBreak and not inPosition
     tp1Hit := false
     entryBarIndex := bar_index
 
-    posSize = calcPositionSize(entryPrice, stopLoss, i_riskAmount)
+    posSize = calcPositionSize(entryPrice, stopLoss, i_riskAmount, pntVal)
     strategy.entry("Short", strategy.short, qty=posSize)
     strategy.exit("TP1_Short", "Short", limit=takeProfit1, stop=stopLoss, qty_percent=i_tp1Percent)
 
     // Tworzenie linii wizualnych
     if i_showEntryLines
-        entryLine := line.new(bar_index, entryPrice, bar_index + 50, entryPrice, color=color.white, width=2, extend=extend.right)
-        slLine := line.new(bar_index, stopLoss, bar_index + 50, stopLoss, color=color.fuchsia, width=2, extend=extend.right)
-        tpLine := line.new(bar_index, takeProfit1, bar_index + 50, takeProfit1, color=color.aqua, width=2, extend=extend.right)
+        myEntryLine := line.new(bar_index, entryPrice, bar_index + 50, entryPrice, color=color.white, width=2, extend=extend.right)
+        mySLLine := line.new(bar_index, stopLoss, bar_index + 50, stopLoss, color=color.fuchsia, width=2, extend=extend.right)
+        myTPLine := line.new(bar_index, takeProfit1, bar_index + 50, takeProfit1, color=color.aqua, width=2, extend=extend.right)
 
 // ============================================================================
 // ZARZĄDZANIE TP1 I BREAK EVEN
@@ -312,17 +312,17 @@ if inPosition and not tp1Hit
     if isLong and high >= takeProfit1
         tp1Hit := true
         strategy.exit("BE_Long", "Long", stop=entryPrice)
-        if not na(slLine)
-            line.set_y1(slLine, entryPrice)
-            line.set_y2(slLine, entryPrice)
-            line.set_color(slLine, color.yellow)
+        if not na(mySLLine)
+            line.set_y1(mySLLine, entryPrice)
+            line.set_y2(mySLLine, entryPrice)
+            line.set_color(mySLLine, color.yellow)
     if not isLong and low <= takeProfit1
         tp1Hit := true
         strategy.exit("BE_Short", "Short", stop=entryPrice)
-        if not na(slLine)
-            line.set_y1(slLine, entryPrice)
-            line.set_y2(slLine, entryPrice)
-            line.set_color(slLine, color.yellow)
+        if not na(mySLLine)
+            line.set_y1(mySLLine, entryPrice)
+            line.set_y2(mySLLine, entryPrice)
+            line.set_color(mySLLine, color.yellow)
 
 // Reset pozycji gdy zamknięta
 if strategy.position_size == 0 and inPosition
@@ -333,12 +333,12 @@ if strategy.position_size == 0 and inPosition
     tp1Hit := false
 
     // Usuń linie
-    if not na(entryLine)
-        line.delete(entryLine)
-    if not na(slLine)
-        line.delete(slLine)
-    if not na(tpLine)
-        line.delete(tpLine)
+    if not na(myEntryLine)
+        line.delete(myEntryLine)
+    if not na(mySLLine)
+        line.delete(mySLLine)
+    if not na(myTPLine)
+        line.delete(myTPLine)
 
 // ============================================================================
 // WIZUALIZACJA
@@ -376,7 +376,7 @@ if barstate.islast
     table.cell(infoTable, 0, 5, "Prev Q High Wick:", text_color=color.white)
     table.cell(infoTable, 1, 5, str.tostring(prevQ_highestBodyWick, "#.##"), text_color=color.green)
     table.cell(infoTable, 0, 6, "Point Value:", text_color=color.white)
-    table.cell(infoTable, 1, 6, "$" + str.tostring(pointValue), text_color=color.yellow)
+    table.cell(infoTable, 1, 6, "$" + str.tostring(pntVal), text_color=color.yellow)
     table.cell(infoTable, 0, 7, "Position:", text_color=color.white)
     table.cell(infoTable, 1, 7, inPosition ? (isLong ? "LONG" : "SHORT") : "NONE", text_color=inPosition ? (isLong ? color.lime : color.red) : color.gray)
     table.cell(infoTable, 0, 8, "Entry:", text_color=color.white)
