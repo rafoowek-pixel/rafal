@@ -373,8 +373,8 @@ plotshape(quarterChanged and i_showQuarterLines, title="Quarter Change", locatio
 // Pokaż poziomy poprzedniego kwartału
 plot(i_showQuarterLines and not na(prevQ_lowestBodyClose) ? prevQ_lowestBodyClose : na, title="Prev Q Low Body", color=color.red, style=plot.style_linebr, linewidth=1)
 plot(i_showQuarterLines and not na(prevQ_highestBodyClose) ? prevQ_highestBodyClose : na, title="Prev Q High Body", color=color.green, style=plot.style_linebr, linewidth=1)
-plot(i_showQuarterLines and not na(prevQ_lowestBodyWick) ? prevQ_lowestBodyWick : na, title="Prev Q Low Wick", color=color.red, style=plot.style_linebr, linewidth=1, linestyle=line.style_dashed)
-plot(i_showQuarterLines and not na(prevQ_highestBodyWick) ? prevQ_highestBodyWick : na, title="Prev Q High Wick", color=color.green, style=plot.style_linebr, linewidth=1, linestyle=line.style_dashed)
+plot(i_showQuarterLines and not na(prevQ_lowestBodyWick) ? prevQ_lowestBodyWick : na, title="Prev Q Low Wick", color=color.new(color.red, 50), style=plot.style_linebr, linewidth=1)
+plot(i_showQuarterLines and not na(prevQ_highestBodyWick) ? prevQ_highestBodyWick : na, title="Prev Q High Wick", color=color.new(color.green, 50), style=plot.style_linebr, linewidth=1)
 
 // Sygnały wejścia
 plotshape(longCorrelationBreak, title="Long Signal", location=location.belowbar, color=color.lime, style=shape.labelup, text="LONG", size=size.normal)
