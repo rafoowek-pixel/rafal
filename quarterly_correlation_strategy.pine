@@ -1,0 +1,420 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Quarterly Correlation Break Strategy
+
+//@version=5
+strategy("Quarterly Correlation Break Strategy", overlay=true, initial_capital=100000, default_qty_type=strategy.fixed, default_qty_value=1, currency=currency.USD)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+i_riskAmount = input.float(1000, "Risk Amount ($)", minval=100)
+i_tp1Percent = input.float(70, "TP1 Percentage (%)", minval=1, maxval=100)
+i_showQuarterLines = input.bool(true, "Show Quarter Lines")
+i_showLabels = input.bool(true, "Show Labels")
+i_timezone = input.string("America/New_York", "Timezone", options=["America/New_York", "America/Chicago", "UTC"])
+
+// Symbole do analizy korelacji
+i_esSymbol = input.symbol("CME_MINI:ES1!", "ES Symbol")
+i_ymSymbol = input.symbol("CBOT_MINI:YM1!", "YM Symbol")
+
+// ============================================================================
+// QUARTER DEFINITIONS
+// Kwartały dzienne (6-godzinne):
+// Q1: 18:00 - 24:00
+// Q2: 00:00 - 06:00
+// Q3: 06:00 - 12:00
+// Q4: 12:00 - 18:00
+//
+// Każdy kwartal dzienny ma 4 kwartały 90-minutowe
+// ============================================================================
+
+// Funkcja do określenia aktualnego kwartału dziennego (1-4)
+getDailyQuarter(h) =>
+    result = 0
+    if h >= 18 and h < 24
+        result := 1
+    else if h >= 0 and h < 6
+        result := 2
+    else if h >= 6 and h < 12
+        result := 3
+    else if h >= 12 and h < 18
+        result := 4
+    result
+
+// Funkcja do określenia kwartału 90-minutowego w ramach kwartału dziennego (1-4)
+get90MinQuarter(h, m) =>
+    totalMinutes = h * 60 + m
+    result = 0
+
+    // Q1: 18:00-24:00 (1080-1440 min)
+    if totalMinutes >= 1080 and totalMinutes < 1440
+        offset = totalMinutes - 1080
+        result := math.floor(offset / 90) + 1
+    // Q2: 00:00-06:00 (0-360 min)
+    else if totalMinutes >= 0 and totalMinutes < 360
+        offset = totalMinutes
+        result := math.floor(offset / 90) + 1
+    // Q3: 06:00-12:00 (360-720 min)
+    else if totalMinutes >= 360 and totalMinutes < 720
+        offset = totalMinutes - 360
+        result := math.floor(offset / 90) + 1
+    // Q4: 12:00-18:00 (720-1080 min)
+    else if totalMinutes >= 720 and totalMinutes < 1080
+        offset = totalMinutes - 720
+        result := math.floor(offset / 90) + 1
+
+    math.min(result, 4)  // Zabezpieczenie przed przekroczeniem 4
+
+// Pobierz aktualną godzinę i minutę
+currentHour = hour(time, i_timezone)
+currentMinute = minute(time, i_timezone)
+
+// Określ aktualne kwartały
+currentDailyQuarter = getDailyQuarter(currentHour)
+current90MinQuarter = get90MinQuarter(currentHour, currentMinute)
+
+// Kombinowany identyfikator kwartału (np. Q11, Q12, Q23, Q34 itd.)
+currentFullQuarter = currentDailyQuarter * 10 + current90MinQuarter
+
+// ============================================================================
+// POBIERANIE DANYCH Z ES I YM
+// ============================================================================
+[esOpen, esHigh, esLow, esClose] = request.security(i_esSymbol, timeframe.period, [open, high, low, close])
+[ymOpen, ymHigh, ymLow, ymClose] = request.security(i_ymSymbol, timeframe.period, [open, high, low, close])
+
+// ============================================================================
+// ZMIENNE DO ŚLEDZENIA KWARTAŁÓW
+// ============================================================================
+var float prevQ_lowestBodyClose = na  // Najniższe zamknięcie body w poprzednim kwartale
+var float prevQ_highestBodyClose = na // Najwyższe zamknięcie body w poprzednim kwartale
+var float prevQ_lowestBodyWick = na   // Knot świecy z najniższym body (jej low)
+var float prevQ_highestBodyWick = na  // Knot świecy z najwyższym body (jej high)
+var int prevQ_lowestBody90Min = 0     // W którym 90-min kwartale było najniższe body
+var int prevQ_highestBody90Min = 0    // W którym 90-min kwartale było najwyższe body
+var int prevDailyQuarter = 0          // Poprzedni kwartal dzienny
+
+// Zmienne dla ES w poprzednim kwartale
+var float prevQ_ES_lowestBodyClose = na
+var float prevQ_ES_highestBodyClose = na
+var float prevQ_ES_lowestBodyWick = na
+var float prevQ_ES_highestBodyWick = na
+
+// Zmienne dla YM w poprzednim kwartale
+var float prevQ_YM_lowestBodyClose = na
+var float prevQ_YM_highestBodyClose = na
+var float prevQ_YM_lowestBodyWick = na
+var float prevQ_YM_highestBodyWick = na
+
+// Aktualne zmienne tymczasowe dla bieżącego kwartału
+var float currQ_lowestBodyClose = na
+var float currQ_highestBodyClose = na
+var float currQ_lowestBodyWick = na
+var float currQ_highestBodyWick = na
+var int currQ_lowestBody90Min = 0
+var int currQ_highestBody90Min = 0
+
+// Dla ES
+var float currQ_ES_lowestBodyClose = na
+var float currQ_ES_highestBodyClose = na
+var float currQ_ES_lowestBodyWick = na
+var float currQ_ES_highestBodyWick = na
+
+// Dla YM
+var float currQ_YM_lowestBodyClose = na
+var float currQ_YM_highestBodyClose = na
+var float currQ_YM_lowestBodyWick = na
+var float currQ_YM_highestBodyWick = na
+
+// ============================================================================
+// DETEKCJA ZMIANY KWARTAŁU DZIENNEGO
+// ============================================================================
+quarterChanged = currentDailyQuarter != currentDailyQuarter[1] and barstate.isconfirmed
+
+if quarterChanged
+    // Zapisz dane z poprzedniego kwartału
+    prevQ_lowestBodyClose := currQ_lowestBodyClose
+    prevQ_highestBodyClose := currQ_highestBodyClose
+    prevQ_lowestBodyWick := currQ_lowestBodyWick
+    prevQ_highestBodyWick := currQ_highestBodyWick
+    prevQ_lowestBody90Min := currQ_lowestBody90Min
+    prevQ_highestBody90Min := currQ_highestBody90Min
+    prevDailyQuarter := currentDailyQuarter[1]
+
+    // ES
+    prevQ_ES_lowestBodyClose := currQ_ES_lowestBodyClose
+    prevQ_ES_highestBodyClose := currQ_ES_highestBodyClose
+    prevQ_ES_lowestBodyWick := currQ_ES_lowestBodyWick
+    prevQ_ES_highestBodyWick := currQ_ES_highestBodyWick
+
+    // YM
+    prevQ_YM_lowestBodyClose := currQ_YM_lowestBodyClose
+    prevQ_YM_highestBodyClose := currQ_YM_highestBodyClose
+    prevQ_YM_lowestBodyWick := currQ_YM_lowestBodyWick
+    prevQ_YM_highestBodyWick := currQ_YM_highestBodyWick
+
+    // Reset zmiennych dla nowego kwartału
+    currQ_lowestBodyClose := na
+    currQ_highestBodyClose := na
+    currQ_lowestBodyWick := na
+    currQ_highestBodyWick := na
+    currQ_lowestBody90Min := 0
+    currQ_highestBody90Min := 0
+
+    currQ_ES_lowestBodyClose := na
+    currQ_ES_highestBodyClose := na
+    currQ_ES_lowestBodyWick := na
+    currQ_ES_highestBodyWick := na
+
+    currQ_YM_lowestBodyClose := na
+    currQ_YM_highestBodyClose := na
+    currQ_YM_lowestBodyWick := na
+    currQ_YM_highestBodyWick := na
+
+// ============================================================================
+// AKTUALIZACJA MIN/MAX BODY DLA BIEŻĄCEGO KWARTAŁU
+// ============================================================================
+// Używamy math.min(open, close) dla najniższego body i math.max(open, close) dla najwyższego body
+lowestBody = math.min(open, close)
+highestBody = math.max(open, close)
+
+esLowestBody = math.min(esOpen, esClose)
+esHighestBody = math.max(esOpen, esClose)
+
+ymLowestBody = math.min(ymOpen, ymClose)
+ymHighestBody = math.max(ymOpen, ymClose)
+
+// Aktualizacja dla NQ
+if na(currQ_lowestBodyClose) or lowestBody < currQ_lowestBodyClose
+    currQ_lowestBodyClose := lowestBody
+    currQ_lowestBodyWick := low  // Knot (low) świecy z najniższym body
+    currQ_lowestBody90Min := current90MinQuarter
+
+if na(currQ_highestBodyClose) or highestBody > currQ_highestBodyClose
+    currQ_highestBodyClose := highestBody
+    currQ_highestBodyWick := high  // Knot (high) świecy z najwyższym body
+    currQ_highestBody90Min := current90MinQuarter
+
+// Aktualizacja dla ES
+if na(currQ_ES_lowestBodyClose) or esLowestBody < currQ_ES_lowestBodyClose
+    currQ_ES_lowestBodyClose := esLowestBody
+    currQ_ES_lowestBodyWick := esLow
+
+if na(currQ_ES_highestBodyClose) or esHighestBody > currQ_ES_highestBodyClose
+    currQ_ES_highestBodyClose := esHighestBody
+    currQ_ES_highestBodyWick := esHigh
+
+// Aktualizacja dla YM
+if na(currQ_YM_lowestBodyClose) or ymLowestBody < currQ_YM_lowestBodyClose
+    currQ_YM_lowestBodyClose := ymLowestBody
+    currQ_YM_lowestBodyWick := ymLow
+
+if na(currQ_YM_highestBodyClose) or ymHighestBody > currQ_YM_highestBodyClose
+    currQ_YM_highestBodyClose := ymHighestBody
+    currQ_YM_highestBodyWick := ymHigh
+
+// ============================================================================
+// FUNKCJA SPRAWDZANIA WYKLUCZONYCH PRZEJŚĆ MIĘDZY KWARTAŁAMI
+// Złamanie korelacji NIE może wydarzyć się pomiędzy:
+// Q14-Q21, Q24-Q31, Q34-Q41, Q44-Q11
+// ============================================================================
+isExcludedTransition() =>
+    prev90Min = current90MinQuarter[1]
+    curr90Min = current90MinQuarter
+    prevDaily = currentDailyQuarter[1]
+    currDaily = currentDailyQuarter
+
+    // Sprawdź czy jesteśmy na granicy kwartałów dziennych
+    excluded = false
+
+    // Q14 -> Q21 (koniec Q1, początek Q2)
+    if prevDaily == 1 and currDaily == 2 and prev90Min == 4 and curr90Min == 1
+        excluded := true
+    // Q24 -> Q31 (koniec Q2, początek Q3)
+    if prevDaily == 2 and currDaily == 3 and prev90Min == 4 and curr90Min == 1
+        excluded := true
+    // Q34 -> Q41 (koniec Q3, początek Q4)
+    if prevDaily == 3 and currDaily == 4 and prev90Min == 4 and curr90Min == 1
+        excluded := true
+    // Q44 -> Q11 (koniec Q4, początek Q1 następnego dnia)
+    if prevDaily == 4 and currDaily == 1 and prev90Min == 4 and curr90Min == 1
+        excluded := true
+
+    excluded
+
+// ============================================================================
+// SPRAWDZANIE CZY ŚWIECE PRZED BREAKIEM SĄ ZGODNE (wszystkie bullish lub bearish)
+// ============================================================================
+nqPrevCandleBullish = close[1] > open[1]
+esPrevCandleBullish = esClose[1] > esOpen[1]
+ymPrevCandleBullish = ymClose[1] > ymOpen[1]
+
+allPrevCandlesAligned = (nqPrevCandleBullish and esPrevCandleBullish and ymPrevCandleBullish) or (not nqPrevCandleBullish and not esPrevCandleBullish and not ymPrevCandleBullish)
+
+// ============================================================================
+// DETEKCJA ZŁAMANIA KORELACJI - LONG (NQ zbiera LOW poprzedniego Q, ES/YM nie)
+// ============================================================================
+// Warunki dla LONG:
+// 1. NQ low zeszło poniżej prevQ_lowestBodyClose (zebrało low poprzedniego Q)
+// 2. NQ zamknęło się powyżej prevQ_lowestBodyWick (zamknięcie ponad knotem)
+// 3. ES NIE zebrało low poprzedniego Q (ani body ani wick)
+// 4. YM NIE zebrało low poprzedniego Q (ani body ani wick)
+// 5. Jesteśmy w tym samym 90-min kwartale co low poprzedniego Q
+// 6. Nie jesteśmy w wykluczonym przejściu
+// 7. Świece poprzednie są zgodne na wszystkich aktywach
+
+nqSweptLow = low < prevQ_lowestBodyClose
+nqClosedAboveWick = close > prevQ_lowestBodyWick
+
+esNotSweptLow = esLow > prevQ_ES_lowestBodyClose and esLow > prevQ_ES_lowestBodyWick
+ymNotSweptLow = ymLow > prevQ_YM_lowestBodyClose and ymLow > prevQ_YM_lowestBodyWick
+
+// ES i YM nie mogą dotknąć ani body ani wick poprzedniego Q
+esBodyNotBelowPrevBody = math.min(esOpen, esClose) > prevQ_ES_lowestBodyClose
+ymBodyNotBelowPrevBody = math.min(ymOpen, ymClose) > prevQ_YM_lowestBodyClose
+
+same90MinAsLow = current90MinQuarter == prevQ_lowestBody90Min
+
+longCorrelationBreak = nqSweptLow and nqClosedAboveWick and esNotSweptLow and ymNotSweptLow and esBodyNotBelowPrevBody and ymBodyNotBelowPrevBody and same90MinAsLow and not isExcludedTransition() and allPrevCandlesAligned and not na(prevQ_lowestBodyClose) and barstate.isconfirmed
+
+// ============================================================================
+// DETEKCJA ZŁAMANIA KORELACJI - SHORT (NQ zbiera HIGH poprzedniego Q, ES/YM nie)
+// ============================================================================
+nqSweptHigh = high > prevQ_highestBodyClose
+nqClosedBelowWick = close < prevQ_highestBodyWick
+
+esNotSweptHigh = esHigh < prevQ_ES_highestBodyClose and esHigh < prevQ_ES_highestBodyWick
+ymNotSweptHigh = ymHigh < prevQ_YM_highestBodyClose and ymHigh < prevQ_YM_highestBodyWick
+
+// ES i YM body nie może zamknąć się powyżej body poprzedniego Q
+esBodyNotAbovePrevBody = math.max(esOpen, esClose) < prevQ_ES_highestBodyClose
+ymBodyNotAbovePrevBody = math.max(ymOpen, ymClose) < prevQ_YM_highestBodyClose
+
+same90MinAsHigh = current90MinQuarter == prevQ_highestBody90Min
+
+shortCorrelationBreak = nqSweptHigh and nqClosedBelowWick and esNotSweptHigh and ymNotSweptHigh and esBodyNotAbovePrevBody and ymBodyNotAbovePrevBody and same90MinAsHigh and not isExcludedTransition() and allPrevCandlesAligned and not na(prevQ_highestBodyClose) and barstate.isconfirmed
+
+// ============================================================================
+// ZARZĄDZANIE POZYCJĄ
+// ============================================================================
+var float entryPrice = na
+var float stopLoss = na
+var float takeProfit1 = na
+var bool inPosition = false
+var bool isLong = false
+var bool tp1Hit = false
+
+// Obliczanie wielkości pozycji na podstawie ryzyka
+calcPositionSize(entry, sl, riskAmt) =>
+    riskPerContract = math.abs(entry - sl)
+    if riskPerContract > 0
+        math.floor(riskAmt / riskPerContract)
+    else
+        0
+
+// ============================================================================
+// SYGNAŁY WEJŚCIA
+// ============================================================================
+// LONG Entry - wchodzimy na otwarciu następnej świecy po sygnale
+if longCorrelationBreak and not inPosition
+    entryPrice := close
+    stopLoss := low  // SL na wicku świecy która stworzyła złamanie
+    takeProfit1 := prevQ_highestBodyClose  // TP na opozycyjnej stronie poprzedniego Q
+    inPosition := true
+    isLong := true
+    tp1Hit := false
+
+    posSize = calcPositionSize(entryPrice, stopLoss, i_riskAmount)
+    if posSize > 0
+        strategy.entry("Long", strategy.long, qty=posSize)
+        strategy.exit("TP1_Long", "Long", limit=takeProfit1, stop=stopLoss, qty_percent=i_tp1Percent)
+
+// SHORT Entry
+if shortCorrelationBreak and not inPosition
+    entryPrice := close
+    stopLoss := high  // SL na wicku świecy która stworzyła złamanie
+    takeProfit1 := prevQ_lowestBodyClose  // TP na opozycyjnej stronie poprzedniego Q
+    inPosition := true
+    isLong := false
+    tp1Hit := false
+
+    posSize = calcPositionSize(entryPrice, stopLoss, i_riskAmount)
+    if posSize > 0
+        strategy.entry("Short", strategy.short, qty=posSize)
+        strategy.exit("TP1_Short", "Short", limit=takeProfit1, stop=stopLoss, qty_percent=i_tp1Percent)
+
+// ============================================================================
+// ZARZĄDZANIE TP1 I BREAK EVEN
+// ============================================================================
+// Sprawdź czy TP1 został osiągnięty
+if inPosition and not tp1Hit
+    if isLong and high >= takeProfit1
+        tp1Hit := true
+        // Przesuń SL na break even dla pozostałych 30%
+        strategy.exit("BE_Long", "Long", stop=entryPrice)
+    if not isLong and low <= takeProfit1
+        tp1Hit := true
+        // Przesuń SL na break even dla pozostałych 30%
+        strategy.exit("BE_Short", "Short", stop=entryPrice)
+
+// Reset pozycji gdy zamknięta
+if strategy.position_size == 0 and inPosition
+    inPosition := false
+    entryPrice := na
+    stopLoss := na
+    takeProfit1 := na
+    tp1Hit := false
+
+// ============================================================================
+// WIZUALIZACJA
+// ============================================================================
+// Linie kwartałów dziennych
+plotshape(quarterChanged and i_showQuarterLines, title="Quarter Change", location=location.belowbar, color=color.blue, style=shape.triangleup, size=size.small)
+
+// Pokaż poziomy poprzedniego kwartału
+plot(i_showQuarterLines and not na(prevQ_lowestBodyClose) ? prevQ_lowestBodyClose : na, title="Prev Q Low Body", color=color.red, style=plot.style_linebr, linewidth=1)
+plot(i_showQuarterLines and not na(prevQ_highestBodyClose) ? prevQ_highestBodyClose : na, title="Prev Q High Body", color=color.green, style=plot.style_linebr, linewidth=1)
+plot(i_showQuarterLines and not na(prevQ_lowestBodyWick) ? prevQ_lowestBodyWick : na, title="Prev Q Low Wick", color=color.red, style=plot.style_linebr, linewidth=1, linestyle=line.style_dashed)
+plot(i_showQuarterLines and not na(prevQ_highestBodyWick) ? prevQ_highestBodyWick : na, title="Prev Q High Wick", color=color.green, style=plot.style_linebr, linewidth=1, linestyle=line.style_dashed)
+
+// Sygnały wejścia
+plotshape(longCorrelationBreak, title="Long Signal", location=location.belowbar, color=color.lime, style=shape.labelup, text="LONG", size=size.normal)
+plotshape(shortCorrelationBreak, title="Short Signal", location=location.abovebar, color=color.red, style=shape.labeldown, text="SHORT", size=size.normal)
+
+// ============================================================================
+// TABELA INFORMACYJNA
+// ============================================================================
+var table infoTable = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 80), border_width=1)
+
+if barstate.islast
+    table.cell(infoTable, 0, 0, "Daily Q:", text_color=color.white)
+    table.cell(infoTable, 1, 0, "Q" + str.tostring(currentDailyQuarter), text_color=color.yellow)
+
+    table.cell(infoTable, 0, 1, "90min Q:", text_color=color.white)
+    table.cell(infoTable, 1, 1, "Q" + str.tostring(currentDailyQuarter) + str.tostring(current90MinQuarter), text_color=color.yellow)
+
+    table.cell(infoTable, 0, 2, "Prev Q Low Body:", text_color=color.white)
+    table.cell(infoTable, 1, 2, str.tostring(prevQ_lowestBodyClose, "#.##"), text_color=color.red)
+
+    table.cell(infoTable, 0, 3, "Prev Q High Body:", text_color=color.white)
+    table.cell(infoTable, 1, 3, str.tostring(prevQ_highestBodyClose, "#.##"), text_color=color.green)
+
+    table.cell(infoTable, 0, 4, "Prev Q Low Wick:", text_color=color.white)
+    table.cell(infoTable, 1, 4, str.tostring(prevQ_lowestBodyWick, "#.##"), text_color=color.red)
+
+    table.cell(infoTable, 0, 5, "Prev Q High Wick:", text_color=color.white)
+    table.cell(infoTable, 1, 5, str.tostring(prevQ_highestBodyWick, "#.##"), text_color=color.green)
+
+    table.cell(infoTable, 0, 6, "In Position:", text_color=color.white)
+    table.cell(infoTable, 1, 6, inPosition ? (isLong ? "LONG" : "SHORT") : "NO", text_color=inPosition ? color.lime : color.gray)
+
+    table.cell(infoTable, 0, 7, "Candles Aligned:", text_color=color.white)
+    table.cell(infoTable, 1, 7, allPrevCandlesAligned ? "YES" : "NO", text_color=allPrevCandlesAligned ? color.lime : color.red)
+
+    table.cell(infoTable, 0, 8, "TP1 Hit:", text_color=color.white)
+    table.cell(infoTable, 1, 8, tp1Hit ? "YES" : "NO", text_color=tp1Hit ? color.lime : color.gray)
+
+// ============================================================================
+// ALERTY
+// ============================================================================
+alertcondition(longCorrelationBreak, title="Long Correlation Break", message="LONG: NQ swept prev Q low, ES/YM did not. Entry signal!")
+alertcondition(shortCorrelationBreak, title="Short Correlation Break", message="SHORT: NQ swept prev Q high, ES/YM did not. Entry signal!")
