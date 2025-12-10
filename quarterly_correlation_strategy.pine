@@ -8,9 +8,10 @@ strategy("Quarterly Correlation Break Strategy", overlay=true, initial_capital=1
 // INPUTS
 // ============================================================================
 i_riskAmount = input.float(1000, "Risk Amount ($)", minval=100)
+i_tickValue = input.float(20, "Tick Value per Point ($)", minval=1, tooltip="NQ E-mini = $20/punkt, Micro NQ = $2/punkt")
 i_tp1Percent = input.float(70, "TP1 Percentage (%)", minval=1, maxval=100)
 i_showQuarterLines = input.bool(true, "Show Quarter Lines")
-i_showLabels = input.bool(true, "Show Labels")
+i_showEntryLines = input.bool(true, "Show Entry/SL/TP Lines")
 i_timezone = input.string("America/New_York", "Timezone", options=["America/New_York", "America/Chicago", "UTC"])
 
 // Symbole do analizy korelacji
@@ -253,22 +254,12 @@ allPrevCandlesAligned = (nqPrevCandleBullish and esPrevCandleBullish and ymPrevC
 // ============================================================================
 // DETEKCJA ZŁAMANIA KORELACJI - LONG (NQ zbiera LOW poprzedniego Q, ES/YM nie)
 // ============================================================================
-// Warunki dla LONG:
-// 1. NQ low zeszło poniżej prevQ_lowestBodyClose (zebrało low poprzedniego Q)
-// 2. NQ zamknęło się powyżej prevQ_lowestBodyWick (zamknięcie ponad knotem)
-// 3. ES NIE zebrało low poprzedniego Q (ani body ani wick)
-// 4. YM NIE zebrało low poprzedniego Q (ani body ani wick)
-// 5. Jesteśmy w tym samym 90-min kwartale co low poprzedniego Q
-// 6. Nie jesteśmy w wykluczonym przejściu
-// 7. Świece poprzednie są zgodne na wszystkich aktywach
-
 nqSweptLow = low < prevQ_lowestBodyClose
 nqClosedAboveWick = close > prevQ_lowestBodyWick
 
 esNotSweptLow = esLow > prevQ_ES_lowestBodyClose and esLow > prevQ_ES_lowestBodyWick
 ymNotSweptLow = ymLow > prevQ_YM_lowestBodyClose and ymLow > prevQ_YM_lowestBodyWick
 
-// ES i YM nie mogą dotknąć ani body ani wick poprzedniego Q
 esBodyNotBelowPrevBody = math.min(esOpen, esClose) > prevQ_ES_lowestBodyClose
 ymBodyNotBelowPrevBody = math.min(ymOpen, ymClose) > prevQ_YM_lowestBodyClose
 
@@ -285,7 +276,6 @@ nqClosedBelowWick = close < prevQ_highestBodyWick
 esNotSweptHigh = esHigh < prevQ_ES_highestBodyClose and esHigh < prevQ_ES_highestBodyWick
 ymNotSweptHigh = ymHigh < prevQ_YM_highestBodyClose and ymHigh < prevQ_YM_highestBodyWick
 
-// ES i YM body nie może zamknąć się powyżej body poprzedniego Q
 esBodyNotAbovePrevBody = math.max(esOpen, esClose) < prevQ_ES_highestBodyClose
 ymBodyNotAbovePrevBody = math.max(ymOpen, ymClose) < prevQ_YM_highestBodyClose
 
@@ -302,58 +292,58 @@ var float takeProfit1 = na
 var bool inPosition = false
 var bool isLong = false
 var bool tp1Hit = false
+var int entryBar = 0
 
 // Obliczanie wielkości pozycji na podstawie ryzyka
-calcPositionSize(entry, sl, riskAmt) =>
-    riskPerContract = math.abs(entry - sl)
+// Dla NQ: 1 punkt = $20 (E-mini) lub $2 (Micro)
+calcPositionSize(entry, sl, riskAmt, tickVal) =>
+    riskPoints = math.abs(entry - sl)
+    riskPerContract = riskPoints * tickVal
     if riskPerContract > 0
-        math.floor(riskAmt / riskPerContract)
+        math.max(1, math.round(riskAmt / riskPerContract))
     else
-        0
+        1
 
 // ============================================================================
 // SYGNAŁY WEJŚCIA
 // ============================================================================
-// LONG Entry - wchodzimy na otwarciu następnej świecy po sygnale
+// LONG Entry
 if longCorrelationBreak and not inPosition
     entryPrice := close
-    stopLoss := low  // SL na wicku świecy która stworzyła złamanie
-    takeProfit1 := prevQ_highestBodyClose  // TP na opozycyjnej stronie poprzedniego Q
+    stopLoss := low
+    takeProfit1 := prevQ_highestBodyClose
     inPosition := true
     isLong := true
     tp1Hit := false
+    entryBar := bar_index
 
-    posSize = calcPositionSize(entryPrice, stopLoss, i_riskAmount)
-    if posSize > 0
-        strategy.entry("Long", strategy.long, qty=posSize)
-        strategy.exit("TP1_Long", "Long", limit=takeProfit1, stop=stopLoss, qty_percent=i_tp1Percent)
+    posSize = calcPositionSize(entryPrice, stopLoss, i_riskAmount, i_tickValue)
+    strategy.entry("Long", strategy.long, qty=posSize)
+    strategy.exit("TP1_Long", "Long", limit=takeProfit1, stop=stopLoss, qty_percent=i_tp1Percent)
 
 // SHORT Entry
 if shortCorrelationBreak and not inPosition
     entryPrice := close
-    stopLoss := high  // SL na wicku świecy która stworzyła złamanie
-    takeProfit1 := prevQ_lowestBodyClose  // TP na opozycyjnej stronie poprzedniego Q
+    stopLoss := high
+    takeProfit1 := prevQ_lowestBodyClose
     inPosition := true
     isLong := false
     tp1Hit := false
+    entryBar := bar_index
 
-    posSize = calcPositionSize(entryPrice, stopLoss, i_riskAmount)
-    if posSize > 0
-        strategy.entry("Short", strategy.short, qty=posSize)
-        strategy.exit("TP1_Short", "Short", limit=takeProfit1, stop=stopLoss, qty_percent=i_tp1Percent)
+    posSize = calcPositionSize(entryPrice, stopLoss, i_riskAmount, i_tickValue)
+    strategy.entry("Short", strategy.short, qty=posSize)
+    strategy.exit("TP1_Short", "Short", limit=takeProfit1, stop=stopLoss, qty_percent=i_tp1Percent)
 
 // ============================================================================
 // ZARZĄDZANIE TP1 I BREAK EVEN
 // ============================================================================
-// Sprawdź czy TP1 został osiągnięty
 if inPosition and not tp1Hit
     if isLong and high >= takeProfit1
         tp1Hit := true
-        // Przesuń SL na break even dla pozostałych 30%
         strategy.exit("BE_Long", "Long", stop=entryPrice)
     if not isLong and low <= takeProfit1
         tp1Hit := true
-        // Przesuń SL na break even dla pozostałych 30%
         strategy.exit("BE_Short", "Short", stop=entryPrice)
 
 // Reset pozycji gdy zamknięta
@@ -367,23 +357,29 @@ if strategy.position_size == 0 and inPosition
 // ============================================================================
 // WIZUALIZACJA
 // ============================================================================
-// Linie kwartałów dziennych
-plotshape(quarterChanged and i_showQuarterLines, title="Quarter Change", location=location.belowbar, color=color.blue, style=shape.triangleup, size=size.small)
-
 // Pokaż poziomy poprzedniego kwartału
 plot(i_showQuarterLines and not na(prevQ_lowestBodyClose) ? prevQ_lowestBodyClose : na, title="Prev Q Low Body", color=color.red, style=plot.style_linebr, linewidth=1)
 plot(i_showQuarterLines and not na(prevQ_highestBodyClose) ? prevQ_highestBodyClose : na, title="Prev Q High Body", color=color.green, style=plot.style_linebr, linewidth=1)
 plot(i_showQuarterLines and not na(prevQ_lowestBodyWick) ? prevQ_lowestBodyWick : na, title="Prev Q Low Wick", color=color.new(color.red, 50), style=plot.style_linebr, linewidth=1)
 plot(i_showQuarterLines and not na(prevQ_highestBodyWick) ? prevQ_highestBodyWick : na, title="Prev Q High Wick", color=color.new(color.green, 50), style=plot.style_linebr, linewidth=1)
 
-// Sygnały wejścia
-plotshape(longCorrelationBreak, title="Long Signal", location=location.belowbar, color=color.lime, style=shape.labelup, text="LONG", size=size.normal)
-plotshape(shortCorrelationBreak, title="Short Signal", location=location.abovebar, color=color.red, style=shape.labeldown, text="SHORT", size=size.normal)
+// Wizualizacja Entry, SL, TP gdy w pozycji
+plot(i_showEntryLines and inPosition ? entryPrice : na, title="Entry Price", color=color.white, style=plot.style_linebr, linewidth=2)
+plot(i_showEntryLines and inPosition ? stopLoss : na, title="Stop Loss", color=color.fuchsia, style=plot.style_linebr, linewidth=2)
+plot(i_showEntryLines and inPosition ? takeProfit1 : na, title="Take Profit", color=color.aqua, style=plot.style_linebr, linewidth=2)
+
+// Sygnały wejścia - strzałki
+plotshape(longCorrelationBreak, title="Long Entry", location=location.belowbar, color=color.lime, style=shape.arrowup, text="LONG", size=size.large)
+plotshape(shortCorrelationBreak, title="Short Entry", location=location.abovebar, color=color.red, style=shape.arrowdown, text="SHORT", size=size.large)
+
+// Kolorowanie tła gdy w pozycji
+bgcolor(inPosition and isLong ? color.new(color.green, 90) : na, title="Long Position BG")
+bgcolor(inPosition and not isLong ? color.new(color.red, 90) : na, title="Short Position BG")
 
 // ============================================================================
 // TABELA INFORMACYJNA
 // ============================================================================
-var table infoTable = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 80), border_width=1)
+var table infoTable = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80), border_width=1)
 
 if barstate.islast
     table.cell(infoTable, 0, 0, "Daily Q:", text_color=color.white)
@@ -404,14 +400,23 @@ if barstate.islast
     table.cell(infoTable, 0, 5, "Prev Q High Wick:", text_color=color.white)
     table.cell(infoTable, 1, 5, str.tostring(prevQ_highestBodyWick, "#.##"), text_color=color.green)
 
-    table.cell(infoTable, 0, 6, "In Position:", text_color=color.white)
-    table.cell(infoTable, 1, 6, inPosition ? (isLong ? "LONG" : "SHORT") : "NO", text_color=inPosition ? color.lime : color.gray)
+    table.cell(infoTable, 0, 6, "Position:", text_color=color.white)
+    table.cell(infoTable, 1, 6, inPosition ? (isLong ? "LONG" : "SHORT") : "NONE", text_color=inPosition ? (isLong ? color.lime : color.red) : color.gray)
 
-    table.cell(infoTable, 0, 7, "Candles Aligned:", text_color=color.white)
-    table.cell(infoTable, 1, 7, allPrevCandlesAligned ? "YES" : "NO", text_color=allPrevCandlesAligned ? color.lime : color.red)
+    table.cell(infoTable, 0, 7, "Entry:", text_color=color.white)
+    table.cell(infoTable, 1, 7, inPosition ? str.tostring(entryPrice, "#.##") : "-", text_color=color.white)
 
-    table.cell(infoTable, 0, 8, "TP1 Hit:", text_color=color.white)
-    table.cell(infoTable, 1, 8, tp1Hit ? "YES" : "NO", text_color=tp1Hit ? color.lime : color.gray)
+    table.cell(infoTable, 0, 8, "Stop Loss:", text_color=color.white)
+    table.cell(infoTable, 1, 8, inPosition ? str.tostring(stopLoss, "#.##") : "-", text_color=color.fuchsia)
+
+    table.cell(infoTable, 0, 9, "Take Profit:", text_color=color.white)
+    table.cell(infoTable, 1, 9, inPosition ? str.tostring(takeProfit1, "#.##") : "-", text_color=color.aqua)
+
+    table.cell(infoTable, 0, 10, "TP1 Hit:", text_color=color.white)
+    table.cell(infoTable, 1, 10, tp1Hit ? "YES (BE active)" : "NO", text_color=tp1Hit ? color.lime : color.gray)
+
+    table.cell(infoTable, 0, 11, "Candles Aligned:", text_color=color.white)
+    table.cell(infoTable, 1, 11, allPrevCandlesAligned ? "YES" : "NO", text_color=allPrevCandlesAligned ? color.lime : color.red)
 
 // ============================================================================
 // ALERTY
