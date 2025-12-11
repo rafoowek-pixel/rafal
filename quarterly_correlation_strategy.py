@@ -783,17 +783,25 @@ def load_tradingview_csv(nq_path: str, es_path: str, ym_path: str) -> Tuple[pd.D
     """
     Załaduj dane z TradingView CSV
 
-    TradingView format (Unix timestamp):
+    TradingView format (Unix timestamp lub ISO string):
     time,open,high,low,close,Plot
     1764827100,25636.25,25640.5,25634.5,25639.25,NaN
+    lub
+    2025-10-14T08:15:00-04:00,24653.25,24661.5,24627.75,24652.75,NaN
     """
     def load_tv_file(path: str) -> pd.DataFrame:
         df = pd.read_csv(path)
 
-        # TradingView używa 'time' jako Unix timestamp (sekundy)
+        # TradingView używa 'time' jako kolumny czasu
         if 'time' in df.columns:
-            # Konwertuj Unix timestamp na datetime
-            df['datetime'] = pd.to_datetime(df['time'], unit='s', utc=True)
+            # Sprawdź czy to Unix timestamp (liczba) czy ISO string
+            first_val = df['time'].iloc[0]
+            if isinstance(first_val, (int, float)) or str(first_val).isdigit():
+                # Unix timestamp (sekundy)
+                df['datetime'] = pd.to_datetime(df['time'].astype(float), unit='s', utc=True)
+            else:
+                # ISO string (np. 2025-10-14T08:15:00-04:00)
+                df['datetime'] = pd.to_datetime(df['time'], utc=True)
             df = df.set_index('datetime')
         elif 'Date' in df.columns:
             # Alternatywny format TV
