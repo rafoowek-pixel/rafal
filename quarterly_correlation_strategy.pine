@@ -238,13 +238,13 @@ if shortSweepNow and not shortSweepDetected and not longSweepDetected
 // ============================================================================
 // ENTRY SIGNALS - pierwsza świeca która zamknie się powyżej/poniżej wicka
 // ============================================================================
-longSignal = longSweepDetected and close > sweepWickLevel
-shortSignal = shortSweepDetected and close < sweepWickLevel
+goLong = longSweepDetected and close > sweepWickLevel
+goShort = shortSweepDetected and close < sweepWickLevel
 
 // Reset sweep po sygnale
-if longSignal
+if goLong
     longSweepDetected := false
-if shortSignal
+if goShort
     shortSweepDetected := false
 
 // ============================================================================
@@ -265,7 +265,7 @@ calcQty(ent, sl, risk) =>
     rpc > 0 ? math.max(1, math.round(risk / rpc)) : 1
 
 // LONG ENTRY
-if longSignal and not inPos and strategy.position_size == 0
+if goLong and not inPos and strategy.position_size == 0
     myEntry := close
     mySL := low
     myTP := pQ_highWick
@@ -277,7 +277,7 @@ if longSignal and not inPos and strategy.position_size == 0
     strategy.exit("TPL", "L", limit=myTP, stop=mySL, qty_percent=i_tp1Percent)
 
 // SHORT ENTRY
-if shortSignal and not inPos and strategy.position_size == 0
+if goShort and not inPos and strategy.position_size == 0
     myEntry := close
     mySL := high
     myTP := pQ_lowWick
@@ -315,8 +315,8 @@ plotshape(longSweepNow, "Sweep Low", shape.circle, location.belowbar, color.oran
 plotshape(shortSweepNow, "Sweep High", shape.circle, location.abovebar, color.orange, size=size.small)
 
 // Entry signals
-plotshape(longSignal, "LONG", shape.triangleup, location.belowbar, color.lime, size=size.large)
-plotshape(shortSignal, "SHORT", shape.triangledown, location.abovebar, color.red, size=size.large)
+plotshape(goLong, "LONG", shape.triangleup, location.belowbar, color.lime, size=size.large)
+plotshape(goShort, "SHORT", shape.triangledown, location.abovebar, color.red, size=size.large)
 
 bgcolor(inPos and posLong ? color.new(color.green, 90) : na)
 bgcolor(inPos and not posLong ? color.new(color.red, 90) : na)
@@ -326,31 +326,31 @@ bgcolor(shortSweepDetected ? color.new(color.purple, 95) : na)
 // ============================================================================
 // DEBUG TABLE
 // ============================================================================
-var table t = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80))
+var table debugTable = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 80))
 
 if barstate.islast
-    table.cell(t, 0, 0, "Q:", text_color=color.white)
-    table.cell(t, 1, 0, "Q" + str.tostring(dailyQ) + str.tostring(minQ), text_color=color.yellow)
-    table.cell(t, 0, 1, "PrevQ Low Wick:", text_color=color.white)
-    table.cell(t, 1, 1, str.tostring(pQ_lowWick, "#.##"), text_color=color.red)
-    table.cell(t, 0, 2, "PrevQ High Wick:", text_color=color.white)
-    table.cell(t, 1, 2, str.tostring(pQ_highWick, "#.##"), text_color=color.green)
-    table.cell(t, 0, 3, "Long Sweep:", text_color=color.white)
-    table.cell(t, 1, 3, longSweepDetected ? "WAITING" : "NO", text_color=longSweepDetected ? color.orange : color.gray)
-    table.cell(t, 0, 4, "Short Sweep:", text_color=color.white)
-    table.cell(t, 1, 4, shortSweepDetected ? "WAITING" : "NO", text_color=shortSweepDetected ? color.purple : color.gray)
-    table.cell(t, 0, 5, "Sweep Level:", text_color=color.white)
-    table.cell(t, 1, 5, str.tostring(sweepWickLevel, "#.##"), text_color=color.orange)
-    table.cell(t, 0, 6, "Candles Aligned:", text_color=color.white)
-    table.cell(t, 1, 6, candlesAligned ? "YES" : "NO", text_color=candlesAligned ? color.lime : color.red)
-    table.cell(t, 0, 7, "Position:", text_color=color.white)
-    table.cell(t, 1, 7, inPos ? (posLong ? "LONG" : "SHORT") : "NONE", text_color=color.yellow)
-    table.cell(t, 0, 8, "Entry:", text_color=color.white)
-    table.cell(t, 1, 8, str.tostring(myEntry, "#.##"), text_color=color.white)
-    table.cell(t, 0, 9, "SL:", text_color=color.white)
-    table.cell(t, 1, 9, str.tostring(mySL, "#.##"), text_color=color.fuchsia)
-    table.cell(t, 0, 10, "TP:", text_color=color.white)
-    table.cell(t, 1, 10, str.tostring(myTP, "#.##"), text_color=color.aqua)
+    table.cell(debugTable, 0, 0, "Q:", text_color=color.white)
+    table.cell(debugTable, 1, 0, "Q" + str.tostring(dailyQ) + str.tostring(minQ), text_color=color.yellow)
+    table.cell(debugTable, 0, 1, "PrevQ Low Wick:", text_color=color.white)
+    table.cell(debugTable, 1, 1, str.tostring(pQ_lowWick, "#.##"), text_color=color.red)
+    table.cell(debugTable, 0, 2, "PrevQ High Wick:", text_color=color.white)
+    table.cell(debugTable, 1, 2, str.tostring(pQ_highWick, "#.##"), text_color=color.green)
+    table.cell(debugTable, 0, 3, "Long Sweep:", text_color=color.white)
+    table.cell(debugTable, 1, 3, longSweepDetected ? "WAITING" : "NO", text_color=longSweepDetected ? color.orange : color.gray)
+    table.cell(debugTable, 0, 4, "Short Sweep:", text_color=color.white)
+    table.cell(debugTable, 1, 4, shortSweepDetected ? "WAITING" : "NO", text_color=shortSweepDetected ? color.purple : color.gray)
+    table.cell(debugTable, 0, 5, "Sweep Level:", text_color=color.white)
+    table.cell(debugTable, 1, 5, str.tostring(sweepWickLevel, "#.##"), text_color=color.orange)
+    table.cell(debugTable, 0, 6, "Candles Aligned:", text_color=color.white)
+    table.cell(debugTable, 1, 6, candlesAligned ? "YES" : "NO", text_color=candlesAligned ? color.lime : color.red)
+    table.cell(debugTable, 0, 7, "Position:", text_color=color.white)
+    table.cell(debugTable, 1, 7, inPos ? (posLong ? "LONG" : "SHORT") : "NONE", text_color=color.yellow)
+    table.cell(debugTable, 0, 8, "Entry:", text_color=color.white)
+    table.cell(debugTable, 1, 8, str.tostring(myEntry, "#.##"), text_color=color.white)
+    table.cell(debugTable, 0, 9, "SL:", text_color=color.white)
+    table.cell(debugTable, 1, 9, str.tostring(mySL, "#.##"), text_color=color.fuchsia)
+    table.cell(debugTable, 0, 10, "TP:", text_color=color.white)
+    table.cell(debugTable, 1, 10, str.tostring(myTP, "#.##"), text_color=color.aqua)
 
-alertcondition(longSignal, "Long Signal", "LONG")
-alertcondition(shortSignal, "Short Signal", "SHORT")
+alertcondition(goLong, "Long Signal", "LONG")
+alertcondition(goShort, "Short Signal", "SHORT")
