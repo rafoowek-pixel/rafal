@@ -779,6 +779,45 @@ def load_data_from_csv(nq_path: str, es_path: str, ym_path: str) -> Tuple[pd.Dat
     return nq_data, es_data, ym_data
 
 
+def load_tradingview_csv(nq_path: str, es_path: str, ym_path: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Załaduj dane z TradingView CSV
+
+    TradingView format:
+    time,open,high,low,close,Volume
+    2024-01-02T18:00:00Z,16500.25,16510.50,16495.00,16505.75,1234
+    """
+    def load_tv_file(path: str) -> pd.DataFrame:
+        df = pd.read_csv(path)
+
+        # TradingView używa 'time' jako kolumny czasu
+        if 'time' in df.columns:
+            df['datetime'] = pd.to_datetime(df['time'])
+            df = df.set_index('datetime')
+        elif 'Date' in df.columns:
+            # Alternatywny format TV
+            df['datetime'] = pd.to_datetime(df['Date'])
+            df = df.set_index('datetime')
+
+        # Normalizuj nazwy kolumn na lowercase
+        df.columns = df.columns.str.lower()
+
+        # Zostaw tylko OHLC
+        df = df[['open', 'high', 'low', 'close']]
+
+        return df
+
+    nq_data = load_tv_file(nq_path)
+    es_data = load_tv_file(es_path)
+    ym_data = load_tv_file(ym_path)
+
+    print(f"Załadowano NQ: {len(nq_data)} świec ({nq_data.index.min()} - {nq_data.index.max()})")
+    print(f"Załadowano ES: {len(es_data)} świec ({es_data.index.min()} - {es_data.index.max()})")
+    print(f"Załadowano YM: {len(ym_data)} świec ({ym_data.index.min()} - {ym_data.index.max()})")
+
+    return nq_data, es_data, ym_data
+
+
 if __name__ == "__main__":
     import sys
 
@@ -822,15 +861,59 @@ if __name__ == "__main__":
                 sweep_type = "LONG SWEEP" if row['long_sweep_detected'] else "SHORT SWEEP"
                 print(f"{row['datetime']} - {sweep_type} @ {row['close']:.2f} (Q{row['daily_q']}.{row['min_q']})")
 
+    elif len(sys.argv) == 4:
+        # Uruchom z plikami TradingView: python script.py NQ.csv ES.csv YM.csv
+        nq_path, es_path, ym_path = sys.argv[1], sys.argv[2], sys.argv[3]
+
+        print(f"\n*** ŁADOWANIE DANYCH Z TRADINGVIEW ***\n")
+
+        try:
+            nq_data, es_data, ym_data = load_tradingview_csv(nq_path, es_path, ym_path)
+
+            strategy = QuarterlyCorrelationStrategy(
+                risk_amount=1000.0,
+                tp1_percent=70.0,
+                point_value=20.0,
+                initial_capital=100000.0
+            )
+
+            print("\nUruchamiam backtest...\n")
+            results = strategy.run_backtest(nq_data, es_data, ym_data)
+            strategy.print_trades()
+
+            # Pokaż sygnały
+            signals = results[(results['long_signal']) | (results['short_signal'])]
+            if not signals.empty:
+                print("\n" + "="*80)
+                print("LOG SYGNAŁÓW (pierwsze 30)")
+                print("="*80)
+                for _, row in signals.head(30).iterrows():
+                    signal_type = "LONG" if row['long_signal'] else "SHORT"
+                    print(f"{row['datetime']} - {signal_type} @ {row['close']:.2f} (Q{row['daily_q']}.{row['min_q']})")
+
+            # Zapisz wyniki do CSV
+            results_file = 'backtest_results.csv'
+            results.to_csv(results_file)
+            print(f"\nWyniki zapisane do: {results_file}")
+
+        except FileNotFoundError as e:
+            print(f"Błąd: Nie znaleziono pliku - {e}")
+        except Exception as e:
+            print(f"Błąd: {e}")
+
     else:
         print("\nUżycie:")
-        print("  python quarterly_correlation_strategy.py --demo    # Uruchom z przykładowymi danymi")
-        print("\nAby użyć z prawdziwymi danymi:")
-        print("  from quarterly_correlation_strategy import QuarterlyCorrelationStrategy, load_data_from_csv")
-        print("  nq, es, ym = load_data_from_csv('NQ_15min.csv', 'ES_15min.csv', 'YM_15min.csv')")
-        print("  strategy = QuarterlyCorrelationStrategy()")
-        print("  results = strategy.run_backtest(nq, es, ym)")
-        print("  strategy.print_trades()")
-        print("\nFormat danych CSV:")
-        print("  datetime,open,high,low,close")
-        print("  2024-01-02 18:00:00,16500.25,16510.50,16495.00,16505.75")
+        print("  python quarterly_correlation_strategy.py --demo")
+        print("      Uruchom z przykładowymi danymi")
+        print("")
+        print("  python quarterly_correlation_strategy.py NQ.csv ES.csv YM.csv")
+        print("      Uruchom z danymi z TradingView")
+        print("")
+        print("Jak wyeksportować dane z TradingView:")
+        print("  1. Otwórz wykres NQ1! (15-minutowy interwał)")
+        print("  2. Prawy klik -> 'Export chart data...'")
+        print("  3. Zapisz jako NQ.csv")
+        print("  4. Powtórz dla ES1! i YM1!")
+        print("")
+        print("Przykład:")
+        print("  python quarterly_correlation_strategy.py NQ_15min.csv ES_15min.csv YM_15min.csv")
